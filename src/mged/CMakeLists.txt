@@ -4,6 +4,14 @@ endif(BRLCAD_ENABLE_TK)
 
 find_package_tcl()
 
+# Find Guile for optional Guile frontend support
+find_package(GUILE)
+
+# Find libedit for optional readline-like support in Guile mode
+if(GUILE_FOUND)
+  find_package(EDITLINE)
+endif(GUILE_FOUND)
+
 set(
   MGED_SOURCES
   adc.c
@@ -54,6 +62,11 @@ set(
   wdb_obj.c
 )
 
+# Add Guile sources if available
+if(GUILE_FOUND)
+  set(MGED_SOURCES ${MGED_SOURCES} guile_cmd.c)
+endif(GUILE_FOUND)
+
 if(HAVE_WINDOWS_H)
   # To associate an icon with the application for Windows (needed
   # for the WiX installer) we must use an rc file.
@@ -85,6 +98,14 @@ if(BRLCAD_ENABLE_TCL)
   if(TK_LIBRARY)
     target_compile_definitions(mged PRIVATE HAVE_TK=1)
   endif(TK_LIBRARY)
+  if(GUILE_FOUND)
+    target_compile_definitions(mged PRIVATE HAVE_GUILE)
+    if(EDITLINE_FOUND)
+      target_compile_definitions(mged PRIVATE HAVE_EDITLINE)
+      target_include_directories(mged PRIVATE ${EDITLINE_INCLUDE_DIRS})
+      target_link_libraries(mged ${EDITLINE_LIBRARIES})
+    endif(EDITLINE_FOUND)
+  endif(GUILE_FOUND)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
 
@@ -110,6 +131,8 @@ set(
   CMakeLists.txt
   cmd.h
   f_cmd.h
+  guile_cmd.c
+  guile_cmd.h
   menu.h
   mged.h
   mged.ico

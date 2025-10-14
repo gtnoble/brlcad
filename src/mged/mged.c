@@ -84,6 +84,11 @@
 #include "./f_cmd.h" // for f_opendb
 #include "brlcad_ident.h"
 
+#ifdef HAVE_GUILE
+#  include "guilecad/guilecad.h"
+#  include "./guile_cmd.h"
+#endif
+
 #ifndef COMMAND_LINE_EDITING
 #  define COMMAND_LINE_EDITING 1
 #endif
@@ -158,6 +163,12 @@ int cbreak_mode = 0;    /* >0 means in cbreak_mode */
 /* The old mged gui is temporarily the default. */
 // FIXME: Global
 int old_mged_gui=1;
+
+#ifdef HAVE_GUILE
+/* Flag indicating whether Guile mode is active */
+// FIXME: Global
+static int guile_mode=0;
+#endif
 
 static int
 mged_bomb_hook(void *clientData, void *data)
@@ -1357,12 +1368,32 @@ stdin_input(ClientData clientData, int UNUSED(mask))
 
 	/* If a complete line was entered, attempt to execute command. */
 
-	if (Tcl_CommandComplete(bu_vls_addr(&s->input_str_prefix))) {
+#ifdef HAVE_GUILE
+	/* In Guile mode, use Guile's expression completion checker */
+	int is_complete = guile_mode ? 
+	    guilecad_expression_complete(bu_vls_addr(&s->input_str_prefix)) :
+	    Tcl_CommandComplete(bu_vls_addr(&s->input_str_prefix));
+#else
+	int is_complete = Tcl_CommandComplete(bu_vls_addr(&s->input_str_prefix));
+#endif
+
+	if (is_complete) {
 	    curr_cmd_list = &head_cmd_list;
 	    if (curr_cmd_list->cl_tie)
 		set_curr_dm(s, curr_cmd_list->cl_tie);
 
-	    if (cmdline(s, &s->input_str_prefix, 1) == CMD_MORE) {
+#ifdef HAVE_GUILE
+	    int status;
+	    if (guile_mode) {
+		status = cmdline_guile(s, &s->input_str_prefix);
+	    } else {
+		status = cmdline(s, &s->input_str_prefix, 1);
+	    }
+#else
+	    int status = cmdline(s, &s->input_str_prefix, 1);
+#endif
+
+	    if (status == CMD_MORE) {
 		/* Remove newline */
 		bu_vls_trunc(&s->input_str_prefix,
 			     bu_vls_strlen(&s->input_str_prefix)-1);
@@ -1424,7 +1455,15 @@ stdin_input(ClientData clientData, int UNUSED(mask))
 	    if (c > CHAR_MAX)
 		c = CHAR_MAX;
 #endif
+#ifdef HAVE_GUILE
+	    if (guile_mode) {
+		guile_process_char(s, c);
+	    } else {
+		mged_process_char(s, c);
+	    }
+#else
 	    mged_process_char(s, c);
+#endif
 #ifdef TRY_STDIN_INPUT_HACK
 	}
     }
@@ -1877,8 +1916,12 @@ main(int argc, char *argv[])
     }
 #endif
 
+#ifdef HAVE_GUILE
+    int use_guile = 0;  /* Flag for Guile mode */
+#endif
+    
     bu_optind = 1;
-    while ((c = bu_getopt(argc, argv, "a:d:hbcCorx:X:v?")) != -1) {
+    while ((c = bu_getopt(argc, argv, "a:d:hbcCgorx:X:v?")) != -1) {
 	if (bu_optopt == '?') c='h';
 	switch (c) {
 	    case 'a':
@@ -1886,6 +1929,16 @@ main(int argc, char *argv[])
 		break;
 	    case 'd':
 		s->dpy_string = bu_optarg;
+		break;
+	    case 'g':
+#ifdef HAVE_GUILE
+		use_guile = 1;
+		s->classic_mged = 1; /* Force classic mode with Guile */
+		s->interactive = 1;
+#else
+		bu_log("ERROR: MGED was not compiled with Guile support.\n");
+		return EXIT_FAILURE;
+#endif
 		break;
 	    case 'r':
 		read_only_flag = 1;
@@ -2208,6 +2261,16 @@ main(int argc, char *argv[])
 	bu_log("Opened in READ ONLY mode\n");
     }
 
+#ifdef HAVE_GUILE
+    /* Initialize Guile if requested - do this before database check
+     * so Guile mode activates even without an open database */
+    if (use_guile) {
+	guilecad_init(s->gedp, NULL);
+	bu_vls_strcpy(&s->mged_prompt, "guile> ");
+	guile_mode = 1;
+    }
+#endif
+
     if (s->dbip != DBI_NULL) {
 	setview(s, 0.0, 0.0, 0.0);
 	ged_dl_notify_func_set(s->gedp, mged_notify);
@@ -2329,6 +2392,28 @@ main(int argc, char *argv[])
 	    attach_display_manager(s->interp, attach, s->dpy_string);
 	}
     }
+
+#ifdef HAVE_GUILE
+    /* Enter Guile REPL if requested and using libedit */
+    if (use_guile) {
+#ifdef HAVE_EDITLINE
+	/* If we have libedit and we're in an interactive TTY, use the libedit REPL */
+	if (s->interactive && s->classic_mged && isatty(fileno(stdin))) {
+	    /* Process .mgedrc first */
+	    do_rc(s);
+	    
+	    /* Set up terminal for input */
+	    if (!run_in_foreground && use_pipe) {
+		notify_parent_done(parent_pipe[1]);
+	    }
+	    
+	    /* Enter libedit REPL - this won't return until quit */
+	    guile_repl_libedit(s);
+	    /* NOTREACHED */
+	}
+#endif /* HAVE_EDITLINE */
+    }
+#endif /* HAVE_GUILE */
 
     /* --- Now safe to process geometry. --- */
 

@@ -14,6 +14,9 @@ if(BRLCAD_ENABLE_TCL)
   endif(EXISTS ${CMAKE_BINARY_DIR}/${LIB_DIR}/Iwidgets4.1.1)
 endif()
 
+# Find Guile for optional Guile frontend support
+find_package(GUILE)
+
 set(
   LIBTCLCAD_SRCS
   auto_path.c
@@ -44,12 +47,24 @@ set(
   wrapper.c
 )
 
+# Add Guile sources if available
+if(GUILE_FOUND)
+  set(LIBTCLCAD_SRCS ${LIBTCLCAD_SRCS} guile_init.c guile_commands.c)
+  # Disable pedantic warning for Guile API's function pointer to void* conversions
+  set_source_files_properties(guile_commands.c PROPERTIES COMPILE_FLAGS "-Wno-pedantic")
+endif(GUILE_FOUND)
+
 if(BRLCAD_ENABLE_TCL)
   # Include directories needed by libtclcad users
   set(TCLCAD_INCLUDE_DIRS ${TCL_INCLUDE_PATH})
   if(TK_INCLUDE_PATH)
     set(TCLCAD_INCLUDE_DIRS ${TCLCAD_INCLUDE_DIRS} ${TK_INCLUDE_PATH} ${X11_INCLUDE_DIR})
   endif(TK_INCLUDE_PATH)
+
+  # Add Guile include directories if available
+  if(GUILE_FOUND)
+    set(TCLCAD_INCLUDE_DIRS ${TCLCAD_INCLUDE_DIRS} ${GUILE_INCLUDE_DIRS})
+  endif(GUILE_FOUND)
 
   # Include directories only needed by the implementation
   set(TCLCAD_LOCAL_INCLUDE_DIRS ${PNG_INCLUDE_DIRS})
@@ -62,6 +77,11 @@ if(BRLCAD_ENABLE_TCL)
   if(TK_LIBRARY)
     set(TCLCAD_LIBS ${TCLCAD_LIBS} ${TK_LIBRARY})
   endif(TK_LIBRARY)
+  
+  # Add Guile libraries if available
+  if(GUILE_FOUND)
+    set(TCLCAD_LIBS ${TCLCAD_LIBS} ${GUILE_LIBRARIES})
+  endif(GUILE_FOUND)
 
   brlcad_addlib(libtclcad "${LIBTCLCAD_SRCS}" "${TCLCAD_LIBS}" "${TCLCAD_INCLUDE_DIRS}" "${TCLCAD_LOCAL_INCLUDE_DIRS}")
   set(ptargets libtclcad)
@@ -75,6 +95,9 @@ if(BRLCAD_ENABLE_TCL)
     if(TK_LIBRARY)
       target_compile_definitions(${pt} PRIVATE HAVE_TK)
     endif(TK_LIBRARY)
+    if(GUILE_FOUND)
+      target_compile_definitions(${pt} PRIVATE HAVE_GUILE)
+    endif(GUILE_FOUND)
   endforeach(pt ${ptargets})
 
   set_target_properties(libtclcad PROPERTIES VERSION 20.0.1 SOVERSION 20)
@@ -93,6 +116,8 @@ add_subdirectory(tests)
 
 cmakefiles(
   ${LIBTCLCAD_SRCS}
+  guile_init.c
+  guile_commands.c
   tclcad_private.h
   view/view.h
   CMakeLists.txt

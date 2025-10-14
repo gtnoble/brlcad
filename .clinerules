@@ -1,0 +1,198 @@
+# BRL-CAD Guile Frontend Project Rules
+
+## Project Context
+This is an implementation of a Guile Scheme frontend for MGED (BRL-CAD's geometry editor), allowing users to script CAD operations using functional programming instead of Tcl.
+
+## Critical Implementation Paths
+
+### Core Integration Pattern
+The Guile integration follows a three-layer architecture:
+1. **C Wrappers** (guile_commands.c): Convert between Scheme and GED commands
+2. **REPL Layer** (guile_cmd.c): Handle multi-line input with parenthesis balancing
+3. **Scheme API** (brlcad-api.scm): Provide idiomatic Scheme functions
+
+### Key Files and Their Roles
+- `misc/CMake/FindGUILE.cmake` - CMake module for finding Guile 3.0
+- `include/guilecad/guilecad.h` - Public API header
+- `src/libtclcad/guile_init.c` - Initialization using scm_with_guile pattern
+- `src/libtclcad/guile_commands.c` - 15 command wrappers using ged_exec
+- `src/mged/guile_cmd.c` - REPL with parenthesis depth tracking
+- `src/mged/guile_cmd.h` - REPL interface
+- `src/mged/mged.c` - Integration points (flag parsing, init, routing)
+- `src/tclscripts/guile/brlcad-api.scm` - Scheme API layer
+
+### mged.c Integration Points (CRITICAL)
+Three specific locations in mged.c must work together:
+1. **Global flag** (~line 169): `static int guile_mode=0;`
+2. **Initialization** (~line 2450): Set after database opens
+3. **Input routing** (~line 2106): Route to guile_process_char when in Guile mode
+
+These MUST be wrapped in `#ifdef HAVE_GUILE` blocks.
+
+## BRL-CAD Build System Patterns
+
+### Conditional Compilation Standard
+All Guile code uses this pattern:
+```c
+#ifdef HAVE_GUILE
+  // Guile-specific code
+#endif
+```
+
+### CMakeLists.txt Integration Pattern
+```cmake
+find_package(GUILE)
+if(GUILE_FOUND)
+    add_definitions(-DHAVE_GUILE)
+    include_directories(${GUILE_INCLUDE_DIRS})
+    target_sources(target PRIVATE guile_file.c)
+    target_link_libraries(target ${GUILE_LIBRARIES})
+endif()
+```
+
+### Header Installation
+Headers in include/guilecad/ need CMakeLists.txt for installation.
+
+### Script Installation
+Scheme files need to be installed to share/guile/ directory.
+
+## Guile API Conventions
+
+### Thread-Safe Initialization
+Always use `scm_with_guile()` wrapper for initialization:
+```c
+scm_with_guile(guilecad_init_internal, gedp);
+```
+
+### Exception Handling
+Use `scm_c_catch()` for all Scheme evaluation:
+```c
+scm_c_catch(SCM_BOOL_T, eval_body, str, error_handler, str, NULL, NULL);
+```
+
+### String Conversion Memory Management
+- Scheme → C: `scm_to_locale_string()` - MUST free result
+- C → Scheme: `scm_from_locale_string()` - Guile manages memory
+
+### Command Wrapper Pattern
+Standard pattern for all GED command wrappers:
+```c
+static SCM scm_ged_command(SCM args) {
+    argv = scm_list_to_argv(args, &argc);
+    ret = ged_exec(gedp, argc, argv);
+    free_argv(argv, argc);
+    return scm_from_locale_string(bu_vls_addr(gedp->ged_result_str));
+}
+```
+
+## Testing Strategy
+
+### Manual Testing Sequence
+1. Build: `cmake -DENABLE_ALL=ON .. && make`
+2. Test flag: `mged -g test.g`
+3. Test commands: `(ged-ls)`, `(ged-draw "obj.s")`
+4. Test multi-line: Enter incomplete expression, verify continuation
+5. Test errors: `(ged-draw "nonexistent")` - should log error gracefully
+
+### Build Validation
+Check for these specific issues:
+- Missing HAVE_GUILE definitions
+- Incorrect include paths for Guile headers
+- Missing libguile-3.0 linkage
+- Scheme files not installed to correct location
+
+## Known Patterns and Gotchas
+
+### BRL-CAD Logging
+Use `bu_log()` not `printf()` - it integrates with MGED's output system.
+
+### GED Command Results
+Results are in `gedp->ged_result_str`, which is a `struct bu_vls`.
+Access with `bu_vls_addr()`, length with `bu_vls_strlen()`.
+
+### REPL State Management
+The REPL tracks state across calls:
+- `paren_depth` for multi-line expressions
+- `input_str` accumulates partial input
+- Return `CMD_MORE` for incomplete expressions
+
+### Prompt Management
+- Default: "mged> " (MGED_PROMPT macro)
+- Guile: "guile> " (set when guile_mode = 1)
+- Continuation: "? " (for incomplete multi-line input)
+
+## Evolution of Decisions
+
+### Runtime vs Compile-Time Selection
+Initially considered compile-time choice, but user specified runtime selection via `-g` flag for flexibility. This means both Tcl and Guile code paths must coexist.
+
+### Integration Approach
+Chose parallel integration (runtime selection) rather than interop because:
+- Simpler implementation
+- Cleaner separation of concerns
+- No Tcl/Guile bridging complexity
+- Matches user requirements
+
+### Command Coverage
+Starting with 15 core GED commands rather than full coverage:
+- Proves the concept
+- Sufficient for basic usage
+- Easy to extend later
+
+## Build System Integration Complete ✅
+
+### Integration Pattern Used
+Successfully integrated Guile support using BRL-CAD's standard patterns:
+
+1. **src/libtclcad/CMakeLists.txt**
+   - Added `find_package(GUILE)` at top level
+   - Conditionally added sources: `if(GUILE_FOUND) set(LIBTCLCAD_SRCS ${LIBTCLCAD_SRCS} guile_init.c guile_commands.c)`
+   - Added to include dirs: `set(TCLCAD_INCLUDE_DIRS ${TCLCAD_INCLUDE_DIRS} ${GUILE_INCLUDE_DIRS})`
+   - Added to libraries: `set(TCLCAD_LIBS ${TCLCAD_LIBS} ${GUILE_LIBRARIES})`
+   - Added definition to targets: `target_compile_definitions(${pt} PRIVATE HAVE_GUILE)`
+
+2. **src/mged/CMakeLists.txt**
+   - Added `find_package(GUILE)`
+   - Conditionally added source: `if(GUILE_FOUND) set(MGED_SOURCES ${MGED_SOURCES} guile_cmd.c)`
+   - Added definition: `target_compile_definitions(mged PRIVATE HAVE_GUILE)`
+
+3. **src/tclscripts/guile/CMakeLists.txt** (new)
+   - Used `brlcad_adddata()` macro for installing Scheme files
+   - Pattern: `brlcad_adddata(guile_SCRIPTS tclscripts/guile)`
+
+4. **include/guilecad/CMakeLists.txt** (new)
+   - Used `brlcad_manage_files()` macro for header installation
+   - Pattern: `brlcad_manage_files(guilecad_headers ${INCLUDE_DIR}/brlcad/guilecad)`
+
+### Key Learning
+- BRL-CAD uses macros like `brlcad_adddata()` and `brlcad_manage_files()` for consistent file management
+- Always use `find_package()` at the beginning of relevant CMakeLists.txt files
+- Conditional compilation uses `if(PACKAGE_FOUND)` pattern throughout
+- Must add subdirectories to parent CMakeLists.txt: `add_subdirectory(guilecad)`
+
+## Next Steps
+
+### Compilation & Testing
+```bash
+cd /home/gtnoble/Software/BRL-CAD/brlcad-build
+cmake -DENABLE_ALL=ON /home/gtnoble/Software/BRL-CAD/brlcad
+make mged -j$(nproc)
+./bin/mged -g test.g
+```
+
+### Documentation Locations
+
+#### User Documentation
+- MGED man page: doc/docbook/system/man1/mged.xml
+- Need to add `-g` flag description
+
+#### Developer Documentation
+- API reference: Could go in doc/docbook/system/man3/
+- Usage examples: Could go in doc/html/
+
+#### Code Comments
+The code is well-commented. Key comment blocks explain:
+- Thread safety requirements
+- Memory management patterns
+- Multi-line expression handling
+- Error handling strategy
