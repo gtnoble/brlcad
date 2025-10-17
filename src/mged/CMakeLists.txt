@@ -6,9 +6,10 @@ find_package_tcl()
 
 # ECL support for alternative extension language
 if(BRLCAD_ENABLE_ECL)
-  find_package(ECL)
+  find_package(ECL REQUIRED)
   if(ECL_FOUND)
     message("-- Found ECL: ${ECL_LIBRARIES}")
+    message("-- ECL include dirs: ${ECL_INCLUDE_DIRS}")
   else(ECL_FOUND)
     message("ECL enablement requested, but ECL is not found - disabling")
     set(BRLCAD_ENABLE_ECL OFF CACHE BOOL "ECL not found" FORCE)

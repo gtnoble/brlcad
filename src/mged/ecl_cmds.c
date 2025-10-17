@@ -44,6 +44,9 @@
 
 #include "./mged.h"
 
+/* Forward declaration for edit_com function used by draw command */
+extern int edit_com(struct mged_state *s, int argc, const char *argv[]);
+
 
 /**
  * Retrieve the MGED state from the ECL global variable.
@@ -120,6 +123,38 @@ ecl_free_argv(int argc, char **argv)
 
 
 /**
+ * Signal an MGED error condition.
+ * This function does not return - it signals a Lisp condition.
+ *
+ * @param command_name Name of the command that failed
+ * @param error_message Error message from ged_result_str
+ * @param return_code Return code from ged_exec_* function
+ */
+static void
+ecl_signal_mged_error(const char *command_name, const char *error_message, int return_code)
+{
+    cl_object error_type, cmd_key, msg_key, code_key;
+    cl_object cmd_val, msg_val, code_val;
+    
+    error_type = ecl_read_from_cstring("MGED-ERROR");
+    cmd_key = ecl_read_from_cstring(":COMMAND");
+    msg_key = ecl_read_from_cstring(":MESSAGE");
+    code_key = ecl_read_from_cstring(":RETURN-CODE");
+    
+    cmd_val = ecl_make_simple_base_string((char *)command_name, -1);
+    msg_val = ecl_make_simple_base_string((char *)error_message, -1);
+    code_val = ecl_make_integer(return_code);
+    
+    /* Signal the condition - this does not return */
+    cl_error(7, error_type,
+             cmd_key, cmd_val,
+             msg_key, msg_val,
+             code_key, code_val);
+    /* NOTREACHED */
+}
+
+
+/**
  * ECL wrapper for the 'ls' command.
  *
  * Lists objects in the database. Can be called with no arguments
@@ -140,28 +175,49 @@ ecl_cmd_ls(cl_narg narg, ...)
     /* Get MGED state */
     s = ecl_get_mged_state();
     if (!s || !s->gedp) {
-	bu_log("ERROR: MGED state not initialized\n");
-	goto cleanup;
+	cl_va_end(args);
+	ecl_signal_mged_error("LS", "MGED state not initialized", BRLCAD_ERROR);
+	/* NOTREACHED */
     }
     
     /* Convert arguments */
     if (ecl_args_to_argv(narg, args, &argc, &argv) != BRLCAD_OK) {
-	bu_log("ERROR: Failed to convert arguments\n");
-	goto cleanup;
+	cl_va_end(args);
+	ecl_signal_mged_error("LS", "Failed to convert arguments", BRLCAD_ERROR);
+	/* NOTREACHED */
     }
     
     /* Call the libged function */
     ret = ged_exec_ls(s->gedp, argc, (const char **)argv);
     
-    /* Convert result */
-    if (ret == BRLCAD_OK && s->gedp->ged_result_str) {
+    if (ret != BRLCAD_OK) {
+	/* Error - extract message from ged_result_str with better fallback handling */
+	const char *err_msg = "Unknown error";
+	
+	/* Check if we can get the actual error message from libged */
+	if (s->gedp && s->gedp->ged_result_str && 
+	    bu_vls_strlen(s->gedp->ged_result_str) > 0) {
+	    err_msg = bu_vls_addr(s->gedp->ged_result_str);
+	} else if (!s->gedp) {
+	    err_msg = "MGED state not initialized";
+	} else if (!s->gedp->dbip) {
+	    err_msg = "A database is not open!";
+	}
+	
+	ecl_free_argv(argc, argv);
+	cl_va_end(args);
+	ecl_signal_mged_error("LS", err_msg, ret);
+	/* NOTREACHED */
+    }
+    
+    /* Success - return result or NIL */
+    if (s->gedp->ged_result_str && bu_vls_strlen(s->gedp->ged_result_str) > 0) {
 	const char *result_str = bu_vls_addr(s->gedp->ged_result_str);
 	result = ecl_make_simple_base_string((char *)result_str, -1);
     }
+    /* else result stays as NIL */
     
-cleanup:
-    if (argv)
-	ecl_free_argv(argc, argv);
+    ecl_free_argv(argc, argv);
     cl_va_end(args);
     
     return result;
@@ -180,32 +236,64 @@ ecl_cmd_draw(cl_narg narg, ...)
     cl_va_list args;
     int argc;
     char **argv = NULL;
+    int ret;
     cl_object result = ECL_NIL;
     
     cl_va_start(args, narg, narg, 0);
     
+    /* Validate arguments - draw requires at least one object name */
+    if (narg < 1) {
+	cl_va_end(args);
+	ecl_signal_mged_error("DRAW", "Usage: (draw object-name [object-name ...])", BRLCAD_ERROR);
+	/* NOTREACHED */
+    }
+    
     /* Get MGED state */
     s = ecl_get_mged_state();
     if (!s || !s->gedp) {
-	bu_log("ERROR: MGED state not initialized\n");
-	goto cleanup;
+	cl_va_end(args);
+	ecl_signal_mged_error("DRAW", "MGED state not initialized", BRLCAD_ERROR);
+	/* NOTREACHED */
     }
     
     /* Convert arguments */
     if (ecl_args_to_argv(narg, args, &argc, &argv) != BRLCAD_OK) {
-	bu_log("ERROR: Failed to convert arguments\n");
-	goto cleanup;
+	cl_va_end(args);
+	ecl_signal_mged_error("DRAW", "Failed to convert arguments", BRLCAD_ERROR);
+	/* NOTREACHED */
     }
     
-    /* For draw, we need to call through the MGED wrapper, not direct libged
-     * This is a placeholder - actual implementation will call cmd_draw
-     */
-    bu_log("draw command called with %d arguments\n", argc);
-    result = ecl_make_simple_base_string("OK", -1);
+    /* Call the actual cmd_draw function through edit_com */
+    ret = edit_com(s, argc, (const char **)argv);
     
-cleanup:
-    if (argv)
+    if (ret != 0) {
+	/* Error - extract message from ged_result_str with better fallback handling */
+	const char *err_msg = "Draw command failed";
+	
+	/* Check if we can get the actual error message from libged */
+	if (s->gedp && s->gedp->ged_result_str && 
+	    bu_vls_strlen(s->gedp->ged_result_str) > 0) {
+	    err_msg = bu_vls_addr(s->gedp->ged_result_str);
+	} else if (!s->gedp) {
+	    err_msg = "MGED state not initialized";
+	} else if (!s->gedp->dbip) {
+	    err_msg = "A database is not open!";
+	}
+	
 	ecl_free_argv(argc, argv);
+	cl_va_end(args);
+	ecl_signal_mged_error("DRAW", err_msg, ret);
+	/* NOTREACHED */
+    }
+    
+    /* Success - return result or NIL */
+    if (s->gedp->ged_result_str && bu_vls_strlen(s->gedp->ged_result_str) > 0) {
+	const char *result_str = bu_vls_addr(s->gedp->ged_result_str);
+	result = ecl_make_simple_base_string((char *)result_str, -1);
+    }
+    /* else result stays as NIL */
+    
+    ecl_free_argv(argc, argv);
     cl_va_end(args);
     
     return result;

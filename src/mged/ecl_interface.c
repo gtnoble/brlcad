@@ -41,13 +41,65 @@
 #include "bu/str.h"
 #include "ged.h"
 
+#ifndef HAVE_WINDOWS_H
+#  include "libtermio.h"
+#endif
+
 #include "./mged.h"
 #include "./cmd.h"
+
+/* Forward declaration for mged_finish from mged.c */
+extern void mged_finish(struct mged_state *s, int exitcode);
 
 /* Forward declarations for command wrappers from ecl_cmds.c */
 extern cl_object ecl_cmd_ls(cl_narg narg, ...);
 extern cl_object ecl_cmd_draw(cl_narg narg, ...);
 extern cl_object ecl_cmd_quit(cl_narg narg, ...);
+
+
+/**
+ * Retrieve the MGED state from the ECL global variable.
+ *
+ * @return Pointer to mged_state, or NULL on error
+ */
+static struct mged_state *
+ecl_get_mged_state(void)
+{
+    cl_object state_sym = ecl_read_from_cstring("*MGED-STATE*");
+    cl_object state_val = ecl_symbol_value(state_sym);
+    
+    if (ecl_unlikely(state_val == ECL_NIL)) {
+	bu_log("ERROR: *MGED-STATE* not initialized\n");
+	return NULL;
+    }
+
+    return (struct mged_state *)(uintptr_t)ecl_to_unsigned_integer(state_val);
+}
+
+
+/**
+ * ECL wrapper for quit/exit that properly cleans up MGED.
+ * This function is registered as an ECL function and callable from Lisp.
+ *
+ * @return Never returns
+ */
+static cl_object
+ecl_quit_wrapper(void)
+{
+    struct mged_state *s;
+    
+    s = ecl_get_mged_state();
+    if (!s) {
+	bu_log("ERROR: NULL mged_state in ecl_quit_wrapper\n");
+	exit(1);
+    }
+    
+    /* Call MGED's proper cleanup and exit */
+    mged_finish(s, 0);
+    /* NOTREACHED - mged_finish calls Tcl_Exit */
+    
+    return ECL_NIL;
+}
 
 
 /**
@@ -59,7 +111,6 @@ extern cl_object ecl_cmd_quit(cl_narg narg, ...);
 void
 ecl_register_commands(struct mged_state *s)
 {
-    struct cmdtab *ctp;
     struct bu_vls ecl_name = BU_VLS_INIT_ZERO;
     
     if (!s) {
@@ -75,27 +126,24 @@ ecl_register_commands(struct mged_state *s)
     /* Register initial set of commands - more will be added in Phase 5 */
     
     /* Register 'ls' command */
-    cl_def_c_function(
+    ecl_def_c_function_va(
 	ecl_read_from_cstring("LS"),
-	(cl_objectfn)ecl_cmd_ls,
-	0,  /* min args */
-	ECL_CALL_ARGUMENTS_LIMIT  /* max args (variadic) */
+	ecl_cmd_ls,
+	0  /* min fixed args */
     );
     
     /* Register 'draw' command */
-    cl_def_c_function(
+    ecl_def_c_function_va(
 	ecl_read_from_cstring("DRAW"),
-	(cl_objectfn)ecl_cmd_draw,
-	0,  /* min args */
-	ECL_CALL_ARGUMENTS_LIMIT  /* max args (variadic) */
+	ecl_cmd_draw,
+	0  /* min fixed args */
     );
     
     /* Register 'quit' command */
-    cl_def_c_function(
+    ecl_def_c_function_va(
 	ecl_read_from_cstring("QUIT"),
-	(cl_objectfn)ecl_cmd_quit,
-	0,  /* min args */
-	0   /* max args */
+	ecl_cmd_quit,
+	0  /* min fixed args */
     );
     
     bu_log("Registered %d ECL commands\n", 3);
@@ -124,32 +172,93 @@ start_ecl_repl(struct mged_state *s)
     bu_log("Starting ECL REPL...\n");
     bu_log("ECL REPL - Type (quit) or (exit) to exit\n");
 
-    /* Initialize ECL runtime */
+    /* Initialize ECL runtime with increased stack size */
     cl_boot(1, argv);
+    
+    /* Increase ECL stack size to prevent overflow (32MB) */
+    cl_eval(ecl_read_from_cstring("(si::set-limit 'c-stack 33554432)"));
+    cl_eval(ecl_read_from_cstring("(si::set-limit 'lisp-stack 33554432)"));
 
     /* Register all MGED commands as ECL functions */
     ecl_register_commands(s);
 
-    /* Set a custom prompt for the REPL */
-    cl_object prompt_hook = ecl_read_from_cstring("*TPL-PROMPT-HOOK*");
-    cl_object prompt_str = ecl_make_simple_base_string("mged> ", -1);
-    cl_set(prompt_hook, prompt_str);
-
-    /* Define quit and exit functions to cleanly exit */
-    ecl_eval_from_cstring(
-	"(defun quit () "
-	"  \"Exit MGED\" "
-	"  (si::quit))"
+    /* Register the quit wrapper as a callable ECL function */
+    ecl_def_c_function(
+	ecl_read_from_cstring("MGED-QUIT"),
+	(cl_objectfn_fixed)ecl_quit_wrapper,
+	0  /* 0 arguments */
     );
+
+    /* Restore terminal to normal mode for ECL REPL */
+    /* MGED disables echo with clr_Echo() for its own command-line editing,
+     * but ECL's REPL expects the terminal to echo characters normally */
+#ifndef HAVE_WINDOWS_H
+    reset_Tty(fileno(stdin));  /* Restore line mode and echo */
+#endif
+
+    /* Set up I/O streams properly for interactive REPL */
+    /* Ensure standard streams are properly connected */
+    cl_eval(ecl_read_from_cstring("(progn \
+	(setf *standard-input* *terminal-io*) \
+	(setf *standard-output* *terminal-io*) \
+	(setf *error-output* *terminal-io*) \
+	(setf *query-io* *terminal-io*) \
+	(setf *debug-io* *terminal-io*))"));
+
+    /* Define MGED-ERROR condition type for command failures */
+    cl_eval(ecl_read_from_cstring(
+	"(define-condition mged-error (error) "
+	"  ((command :initarg :command :reader mged-error-command) "
+	"   (message :initarg :message :reader mged-error-message) "
+	"   (return-code :initarg :return-code :reader mged-error-return-code)) "
+	"  (:report (lambda (condition stream) "
+	"             (format stream \"MGED command '~A' failed: ~A\" "
+	"                     (mged-error-command condition) "
+	"                     (mged-error-message condition)))))"
+    ));
+
+    /* Define quit and exit functions that call MGED's proper cleanup path.
+     * These call the registered MGED-QUIT function which invokes mged_finish()
+     * for proper cleanup (closing database, releasing displays, etc.) before exit. */
+    cl_eval(ecl_read_from_cstring(
+	"(defun quit (&optional (status 0)) "
+	"  \"Exit MGED with proper cleanup.\" "
+	"  (declare (ignore status)) "
+	"  (mged-quit))"
+    ));
     
-    ecl_eval_from_cstring(
-	"(defun exit () "
-	"  \"Exit MGED\" "
-	"  (si::quit))"
-    );
+    cl_eval(ecl_read_from_cstring(
+	"(defun exit (&optional (status 0)) "
+	"  \"Exit MGED with proper cleanup.\" "
+	"  (declare (ignore status)) "
+	"  (mged-quit))"
+    ));
+    
+    /* Use ECL's default debugger instead of custom error handler.
+     * A custom error handler was previously causing stack overflow when handling
+     * unknown REPL commands. ECL's native debugger provides better error handling
+     * and recovery options. */
 
-    /* Start ECL's native REPL - this will block until user quits */
-    tpl_fn = ecl_read_from_cstring("SI::TPL");
+    /* Define MGED REPL wrapper that establishes MGED-TOPLEVEL restart.
+     * This restart allows users to return to the REPL from the debugger
+     * using (invoke-restart 'mged-toplevel), which was not possible with
+     * ECL's built-in RESTART-TOPLEVEL restart (it's only active during
+     * the dynamic extent of the top-level read-eval-print, not in the
+     * debugger's own REPL). */
+    cl_eval(ecl_read_from_cstring(
+	"(defun mged-toplevel-repl () "
+	"  \"MGED ECL REPL with working toplevel restart\" "
+	"  (loop "
+	"    (restart-case "
+	"        (si::tpl) "
+	"      (mged-toplevel () "
+	"        :report \"Return to MGED ECL REPL\" "
+	"        (format t \"~&Returning to MGED REPL...~%\") "
+	"        (values)))))"
+    ));
+
+    /* Start the MGED REPL wrapper - this will block until user quits */
+    tpl_fn = ecl_read_from_cstring("MGED-TOPLEVEL-REPL");
     ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
 	cl_funcall(1, tpl_fn);
     } ECL_CATCH_ALL_IF_CAUGHT {

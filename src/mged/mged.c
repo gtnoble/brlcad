@@ -1954,6 +1954,25 @@ main(int argc, char *argv[])
     argc -= bu_optind;
     argv += bu_optind;
 
+    /* Validate extension language if specified */
+    if (extension_language) {
+	if (BU_STR_EQUAL(extension_language, "tcl")) {
+	    /* Default behavior, no action needed */
+	} else if (BU_STR_EQUAL(extension_language, "ecl")) {
+#ifdef HAVE_ECL
+	    /* ECL will be handled later in initialization */
+#else
+	    bu_log("ERROR: ECL extension language requested but ECL support is not available.\n");
+	    bu_log("       Rebuild with -DBRLCAD_ENABLE_ECL=ON to enable ECL support.\n");
+	    exit(1);
+#endif
+	} else {
+	    bu_log("ERROR: Unsupported extension language '%s'\n", extension_language);
+	    bu_log("       Supported languages: tcl, ecl\n");
+	    exit(1);
+	}
+    }
+
     if (argc > 1) {
 	/* if there is more than a file name remaining, mged is not interactive */
 	s->interactive = 0;
@@ -2188,20 +2207,29 @@ main(int argc, char *argv[])
     if (!s->interactive || s->classic_mged || old_mged_gui) {
 	/* Open the database */
 	if (argc >= 1) {
-	    const char *av[3];
+	    const char *av[4];
 
 	    av[0] = "opendb";
 	    av[1] = argv[0];
 	    av[2] = NULL;
+	    av[3] = NULL;
 
-	    /* Command line may have more than 2 args, opendb only wants 2
-	     * expecting second to be the file name.
-	     * NOTE: this way makes it so f_opendb does not care about y/n
-	     * and always create a new db if one does not exist since we want
-	     * to allow mged to process args after the db as a command
+	    /* Command line may have more than 2 args, opendb only wants 2-3
+	     * expecting second to be the file name, and optional third for y/n.
+	     * NOTE: For most cases, we auto-create if db doesn't exist since we want
+	     * to allow mged to process args after the db as a command.
+	     * For ECL mode specifically, we always auto-create to avoid interactive prompts.
 	     */
+#ifdef HAVE_ECL
+	    if (extension_language && BU_STR_EQUAL(extension_language, "ecl")) {
+		/* Auto-create database for ECL mode to avoid prompts */
+		av[2] = "y";
+	    }
+#endif
+
 	    struct cmdtab ec = {MGED_CMD_MAGIC, NULL, NULL, NULL, s};
-	    if (f_opendb(&ec, s->interp, 2, av) == TCL_ERROR) {
+	    int av_count = (av[2] != NULL) ? 3 : 2;
+	    if (f_opendb(&ec, s->interp, av_count, av) == TCL_ERROR) {
 		if (!run_in_foreground && use_pipe) {
 		    notify_parent_done(parent_pipe[1]);
 		}
