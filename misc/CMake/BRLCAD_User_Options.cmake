@@ -211,6 +211,10 @@ mark_as_advanced(BRLCAD_ENABLE_QT)
 option(BRLCAD_ENABLE_OSG "Enable features requiring OpenSceneGraph" OFF)
 mark_as_advanced(BRLCAD_ENABLE_OSG)
 
+# Enable features requiring Embeddable Common Lisp
+option(BRLCAD_ENABLE_ECL "Enable ECL extension language support for MGED" OFF)
+mark_as_advanced(BRLCAD_ENABLE_ECL)
+
 if(APPLE)
   if(BRLCAD_ENABLE_OSG AND NOT BRLCAD_ENABLE_AQUA)
     set(OSG_WINDOWING_SYSTEM "X11" CACHE STRING "Use X11" FORCE)

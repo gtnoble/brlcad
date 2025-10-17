@@ -84,6 +84,10 @@
 #include "./f_cmd.h" // for f_opendb
 #include "brlcad_ident.h"
 
+#ifdef HAVE_ECL
+#include "./ecl_interface.h"
+#endif
+
 #ifndef COMMAND_LINE_EDITING
 #  define COMMAND_LINE_EDITING 1
 #endif
@@ -1877,8 +1881,10 @@ main(int argc, char *argv[])
     }
 #endif
 
+    char *extension_language = NULL;  /* NULL=tcl, "ecl"=ECL */
+
     bu_optind = 1;
-    while ((c = bu_getopt(argc, argv, "a:d:hbcCorx:X:v?")) != -1) {
+    while ((c = bu_getopt(argc, argv, "a:d:hbcCorL:x:X:v?")) != -1) {
 	if (bu_optopt == '?') c='h';
 	switch (c) {
 	    case 'a':
@@ -1896,6 +1902,9 @@ main(int argc, char *argv[])
 	    case 'C':
 		s->classic_mged = 0;
 		s->interactive = 2; // >1 to indicate requested
+		break;
+	    case 'L':
+		extension_language = bu_optarg;
 		break;
 	    case 'x':
 		sscanf(bu_optarg, "%x", (unsigned int *)&rt_debug);
@@ -2480,6 +2489,15 @@ main(int argc, char *argv[])
     }
 
     mged_global_db_ctx.init_flag = 0; /* all done with initialization */
+
+#ifdef HAVE_ECL
+    /* Check if ECL REPL was requested via -L ecl */
+    if (extension_language && BU_STR_EQUAL(extension_language, "ecl")) {
+	/* Start ECL REPL - this never returns, exits mged when user quits */
+	start_ecl_repl(s);
+	/* NOTREACHED */
+    }
+#endif
 
     /**************** M A I N   L O O P *********************/
     while (1) {

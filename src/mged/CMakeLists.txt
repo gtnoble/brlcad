@@ -4,6 +4,17 @@ endif(BRLCAD_ENABLE_TK)
 
 find_package_tcl()
 
+# ECL support for alternative extension language
+if(BRLCAD_ENABLE_ECL)
+  find_package(ECL)
+  if(ECL_FOUND)
+    message("-- Found ECL: ${ECL_LIBRARIES}")
+  else(ECL_FOUND)
+    message("ECL enablement requested, but ECL is not found - disabling")
+    set(BRLCAD_ENABLE_ECL OFF CACHE BOOL "ECL not found" FORCE)
+  endif(ECL_FOUND)
+endif(BRLCAD_ENABLE_ECL)
+
 set(
   MGED_SOURCES
   adc.c
@@ -54,6 +65,11 @@ set(
   wdb_obj.c
 )
 
+# Add ECL source files if ECL is enabled
+if(BRLCAD_ENABLE_ECL AND ECL_FOUND)
+  set(MGED_SOURCES ${MGED_SOURCES} ecl_interface.c ecl_cmds.c)
+endif(BRLCAD_ENABLE_ECL AND ECL_FOUND)
+
 if(HAVE_WINDOWS_H)
   # To associate an icon with the application for Windows (needed
   # for the WiX installer) we must use an rc file.
@@ -86,6 +102,14 @@ if(BRLCAD_ENABLE_TCL)
     target_compile_definitions(mged PRIVATE HAVE_TK=1)
   endif(TK_LIBRARY)
   target_include_directories(mged BEFORE PRIVATE ${MGED_INCLUDE_DIRS})
+  
+  # Add ECL support if enabled
+  if(BRLCAD_ENABLE_ECL AND ECL_FOUND)
+    target_compile_definitions(mged PRIVATE HAVE_ECL=1)
+    target_include_directories(mged PRIVATE ${ECL_INCLUDE_DIRS})
+    target_link_libraries(mged ${ECL_LIBRARIES})
+  endif(BRLCAD_ENABLE_ECL AND ECL_FOUND)
+  
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)
 
   # MGED needs the tclIndex and pkgIndex files set up correctly
