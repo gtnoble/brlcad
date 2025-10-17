@@ -73,7 +73,7 @@ const char cmd4545[] = {'4', '5', COMMA, '4', '5', '\0'};
 // are called at lower levels.
 struct mged_opendb_ctx mged_global_db_ctx;
 
-static struct cmdtab mged_cmdtab[] = {
+struct cmdtab mged_cmdtab[] = {
     {MGED_CMD_MAGIC, "%", f_comm, GED_FUNC_PTR_NULL, NULL},
     {MGED_CMD_MAGIC, cmd3525, f_bv_35_25, GED_FUNC_PTR_NULL, NULL}, /* 35,25 */
     {MGED_CMD_MAGIC, "3ptarb", cmd_ged_more_wrapper, ged_exec_3ptarb, NULL},

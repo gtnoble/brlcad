@@ -51,10 +51,11 @@
 /* Forward declaration for mged_finish from mged.c */
 extern void mged_finish(struct mged_state *s, int exitcode);
 
-/* Forward declarations for command wrappers from ecl_cmds.c */
-extern cl_object ecl_cmd_ls(cl_narg narg, ...);
-extern cl_object ecl_cmd_draw(cl_narg narg, ...);
-extern cl_object ecl_cmd_quit(cl_narg narg, ...);
+/* Forward declaration for generic dispatcher from ecl_cmds.c */
+extern cl_object ecl_generic_mged_dispatcher(cl_narg narg, ...);
+
+/* Forward declaration for mged_cmdtab from setup.c */
+extern struct cmdtab mged_cmdtab[];
 
 
 /**
@@ -105,49 +106,113 @@ ecl_quit_wrapper(void)
 /**
  * Register all MGED commands as ECL functions.
  *
- * This function iterates through the mged_cmdtab and registers each
- * command as an ECL function that can be called from the REPL.
+ * Iterates through mged_cmdtab and dynamically creates Lisp wrapper
+ * functions for each command with a ged_exec_* function. This approach
+ * eliminates the need for per-command wrapper functions and automatically
+ * includes new commands added to setup.c.
+ *
+ * All commands are registered in the MGED package to avoid conflicts with
+ * Common Lisp built-in functions (e.g., DEBUG).
  */
 void
 ecl_register_commands(struct mged_state *s)
 {
-    struct bu_vls ecl_name = BU_VLS_INIT_ZERO;
+    struct cmdtab *ctp;
+    int count = 0;
+    struct bu_vls lisp_code = BU_VLS_INIT_ZERO;
+    struct bu_vls upper_name = BU_VLS_INIT_ZERO;
+    struct bu_vls exports = BU_VLS_INIT_ZERO;
+    cl_object dispatcher_sym;
+    size_t i;
     
     if (!s) {
 	bu_log("ERROR: NULL mged_state passed to ecl_register_commands\n");
 	return;
     }
 
-    /* Store MGED state in ECL global variable for access by command wrappers */
-    cl_object state_sym = ecl_read_from_cstring("*MGED-STATE*");
-    cl_object state_ptr = ecl_make_unsigned_integer((uintptr_t)s);
-    cl_set(state_sym, state_ptr);
+    /* Build export list for MGED package - collect all command names */
+    /* Shadow MGED commands that conflict with Common Lisp built-ins */
+    bu_vls_strcpy(&exports, "(defpackage :mged (:use :cl) "
+	"(:shadow #:debug #:get #:set #:time #:search #:sleep #:push #:t) "
+	"(:export");
+    for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
+	if (ctp->ged_func == GED_FUNC_PTR_NULL)
+	    continue;
+	
+	/* Convert to uppercase */
+	bu_vls_strcpy(&upper_name, ctp->name);
+	for (i = 0; i < bu_vls_strlen(&upper_name); i++) {
+	    char c = bu_vls_addr(&upper_name)[i];
+	    if (c >= 'a' && c <= 'z') {
+		bu_vls_addr(&upper_name)[i] = c - ('a' - 'A');
+	    }
+	}
+	
+	bu_vls_printf(&exports, " #:%s", bu_vls_addr(&upper_name));
+    }
+    bu_vls_strcat(&exports, "))");
+    
+    /* Create MGED package with all command exports */
+    ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
+	cl_eval(ecl_read_from_cstring(bu_vls_addr(&exports)));
+    } ECL_CATCH_ALL_IF_CAUGHT {
+	bu_log("ERROR: Failed to create MGED package\n");
+	bu_vls_free(&lisp_code);
+	bu_vls_free(&upper_name);
+	bu_vls_free(&exports);
+	return;
+    } ECL_CATCH_ALL_END;
+    
+    /* Switch to MGED package */
+    cl_eval(ecl_read_from_cstring("(in-package :mged)"));
 
-    /* Register initial set of commands - more will be added in Phase 5 */
+    /* Store MGED state in ECL global variable (in MGED package) */
+    {
+	cl_object state_sym = ecl_read_from_cstring("*MGED-STATE*");
+	cl_object state_ptr = ecl_make_unsigned_integer((uintptr_t)s);
+	cl_set(state_sym, state_ptr);
+    }
+
+    /* Register the generic dispatcher as a C function */
+    dispatcher_sym = ecl_read_from_cstring("ECL-MGED-DISPATCHER");
+    ecl_def_c_function_va(dispatcher_sym, ecl_generic_mged_dispatcher, 1);
+
+    /* Iterate through mged_cmdtab and register each command in MGED package */
+    for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
+	
+	/* Skip commands without ged_exec_* functions (custom MGED functions) */
+	if (ctp->ged_func == GED_FUNC_PTR_NULL)
+	    continue;
+	
+	/* Convert command name to uppercase for Lisp function name */
+	bu_vls_strcpy(&upper_name, ctp->name);
+	for (i = 0; i < bu_vls_strlen(&upper_name); i++) {
+	    char c = bu_vls_addr(&upper_name)[i];
+	    if (c >= 'a' && c <= 'z') {
+		bu_vls_addr(&upper_name)[i] = c - ('a' - 'A');
+	    }
+	}
+	
+	/* Create a Lisp wrapper function in MGED package */
+	bu_vls_sprintf(&lisp_code,
+	    "(defun %s (&rest args) "
+	    "  \"MGED command: %s\" "
+	    "  (apply #'ecl-mged-dispatcher \"%s\" args))",
+	    bu_vls_addr(&upper_name), ctp->name, ctp->name);
+	
+	/* Evaluate the Lisp code to define the function */
+	ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
+	    cl_eval(ecl_read_from_cstring(bu_vls_addr(&lisp_code)));
+	    count++;
+	} ECL_CATCH_ALL_IF_CAUGHT {
+	    bu_log("Warning: Failed to register command '%s'\n", ctp->name);
+	} ECL_CATCH_ALL_END;
+    }
     
-    /* Register 'ls' command */
-    ecl_def_c_function_va(
-	ecl_read_from_cstring("LS"),
-	ecl_cmd_ls,
-	0  /* min fixed args */
-    );
-    
-    /* Register 'draw' command */
-    ecl_def_c_function_va(
-	ecl_read_from_cstring("DRAW"),
-	ecl_cmd_draw,
-	0  /* min fixed args */
-    );
-    
-    /* Register 'quit' command */
-    ecl_def_c_function_va(
-	ecl_read_from_cstring("QUIT"),
-	ecl_cmd_quit,
-	0  /* min fixed args */
-    );
-    
-    bu_log("Registered %d ECL commands\n", 3);
-    bu_vls_free(&ecl_name);
+    bu_log("Registered %d ECL commands in MGED package via dynamic dispatch\n", count);
+    bu_vls_free(&lisp_code);
+    bu_vls_free(&upper_name);
+    bu_vls_free(&exports);
 }
 
 

@@ -84,14 +84,18 @@ ecl_args_to_argv(cl_narg narg, cl_va_list args, int *argc, char ***argv)
     
     for (i = 0; i < narg; i++) {
 	cl_object arg = cl_va_arg(args);
+	cl_object base_str;
 	
 	/* Convert ECL object to string */
 	if (ecl_stringp(arg)) {
-	    (*argv)[i] = bu_strdup(ecl_base_string_pointer_safe(arg));
+	    /* Coerce to base-string, then extract C pointer */
+	    base_str = si_coerce_to_base_string(arg);
+	    (*argv)[i] = bu_strdup(ecl_base_string_pointer_safe(base_str));
 	} else {
 	    /* For non-string objects, convert to string representation */
 	    cl_object str_obj = cl_princ_to_string(arg);
-	    (*argv)[i] = bu_strdup(ecl_base_string_pointer_safe(str_obj));
+	    base_str = si_coerce_to_base_string(str_obj);
+	    (*argv)[i] = bu_strdup(ecl_base_string_pointer_safe(base_str));
 	}
     }
     (*argv)[narg] = NULL;
@@ -232,66 +236,56 @@ ecl_exec_mged_command(const char *command_name, cl_narg narg, cl_va_list args)
 
 
 /**
- * ECL wrapper for the 'ls' command.
+ * Generic ECL wrapper that dispatches any MGED command.
+ * 
+ * The command name is passed as the first ECL argument, followed by
+ * the actual command arguments. This single dispatcher handles all
+ * MGED commands, eliminating the need for per-command wrapper functions.
  *
- * Lists objects in the database. Can be called with no arguments
- * or with flags like "-a", "-l", etc.
+ * @param narg Number of arguments (including command name)
+ * @param ... Variadic ECL arguments
+ * @return Result from command or signals error
  */
 cl_object
-ecl_cmd_ls(cl_narg narg, ...)
+ecl_generic_mged_dispatcher(cl_narg narg, ...)
 {
     cl_va_list args;
+    cl_object cmd_name_obj;
+    const char *command_name;
     cl_object result;
+    cl_narg actual_narg;
     
-    cl_va_start(args, narg, narg, 0);
-    result = ecl_exec_mged_command("ls", narg, args);
-    cl_va_end(args);
-    
-    return result;
-}
-
-
-/**
- * ECL wrapper for the 'draw' command.
- *
- * Draws objects in the display. Requires at least one object name.
- */
-cl_object
-ecl_cmd_draw(cl_narg narg, ...)
-{
-    cl_va_list args;
-    cl_object result;
-    
-    /* Validate arguments - draw requires at least one object name */
     if (narg < 1) {
-	ecl_signal_mged_error("DRAW", "Usage: (draw object-name [object-name ...])", BRLCAD_ERROR);
+	ecl_signal_mged_error("dispatcher", "No command name provided", BRLCAD_ERROR);
 	/* NOTREACHED */
     }
     
     cl_va_start(args, narg, narg, 0);
-    result = ecl_exec_mged_command("draw", narg, args);
+    
+    /* First argument is the command name */
+    cmd_name_obj = cl_va_arg(args);
+    
+    if (!ecl_stringp(cmd_name_obj)) {
+	cl_va_end(args);
+	ecl_signal_mged_error("dispatcher", "Command name must be a string", BRLCAD_ERROR);
+	/* NOTREACHED */
+    }
+    
+    /* Coerce to base-string, then extract C pointer */
+    {
+	cl_object base_str = si_coerce_to_base_string(cmd_name_obj);
+	command_name = ecl_base_string_pointer_safe(base_str);
+    }
+    
+    /* Remaining arguments are the actual command arguments */
+    actual_narg = narg - 1;
+    
+    /* Call the generic executor with the remaining args */
+    result = ecl_exec_mged_command(command_name, actual_narg, args);
+    
     cl_va_end(args);
     
     return result;
-}
-
-
-/**
- * ECL wrapper for the 'quit' command.
- *
- * Exits MGED. This is already defined in ecl_interface.c but
- * included here for completeness.
- */
-cl_object
-ecl_cmd_quit(cl_narg narg, ...)
-{
-    (void)narg; /* Unused */
-    
-    /* Exit ECL REPL which will trigger mged exit */
-    cl_object quit_fn = ecl_read_from_cstring("SI::QUIT");
-    cl_funcall(1, quit_fn);
-    
-    return ECL_NIL;
 }
 
 
