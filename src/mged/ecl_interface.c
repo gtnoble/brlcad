@@ -34,6 +34,16 @@
 #include <string.h>
 #include <ecl/ecl.h>
 
+#ifdef HAVE_SYS_SELECT_H
+#  include <sys/select.h>
+#endif
+#ifdef HAVE_SYS_TIME_H
+#  include <sys/time.h>
+#endif
+#ifdef HAVE_WINDOWS_H
+#  include <conio.h>  /* for _kbhit() */
+#endif
+
 #include "bio.h"
 #include "bu/app.h"
 #include "bu/log.h"
@@ -51,8 +61,9 @@
 /* Forward declaration for mged_finish from mged.c */
 extern void mged_finish(struct mged_state *s, int exitcode);
 
-/* Forward declaration for generic dispatcher from ecl_cmds.c */
+/* Forward declarations from ecl_cmds.c */
 extern cl_object ecl_generic_mged_dispatcher(cl_narg narg, ...);
+extern cl_object ecl_mged_cmd_dispatcher(cl_narg narg, ...);
 
 /* Forward declaration for mged_cmdtab from setup.c */
 extern struct cmdtab mged_cmdtab[];
@@ -66,7 +77,7 @@ extern struct cmdtab mged_cmdtab[];
 static struct mged_state *
 ecl_get_mged_state(void)
 {
-    cl_object state_sym = ecl_read_from_cstring("*MGED-STATE*");
+    cl_object state_sym = ecl_read_from_cstring("MGED::*MGED-STATE*");
     cl_object state_val = ecl_symbol_value(state_sym);
     
     if (ecl_unlikely(state_val == ECL_NIL)) {
@@ -75,6 +86,45 @@ ecl_get_mged_state(void)
     }
 
     return (struct mged_state *)(uintptr_t)ecl_to_unsigned_integer(state_val);
+}
+
+
+/**
+ * Check if stdin has data available without blocking.
+ * This function uses select() on Unix and _kbhit() on Windows.
+ *
+ * @return ECL T if input is available, NIL otherwise
+ */
+static cl_object
+ecl_stdin_ready(void)
+{
+#ifdef HAVE_WINDOWS_H
+    /* Windows: use _kbhit() to check for keyboard input */
+    if (_kbhit()) {
+	return ECL_T;
+    }
+    return ECL_NIL;
+#else
+    /* Unix: use select() with zero timeout for non-blocking check */
+    fd_set read_fds;
+    struct timeval timeout;
+    int result;
+    
+    FD_ZERO(&read_fds);
+    FD_SET(STDIN_FILENO, &read_fds);
+    
+    /* Zero timeout = return immediately */
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+    
+    result = select(STDIN_FILENO + 1, &read_fds, NULL, NULL, &timeout);
+    
+    if (result > 0 && FD_ISSET(STDIN_FILENO, &read_fds)) {
+	return ECL_T;  /* Input is available */
+    }
+    
+    return ECL_NIL;  /* No input available or error */
+#endif
 }
 
 
@@ -100,6 +150,35 @@ ecl_quit_wrapper(void)
     /* NOTREACHED - mged_finish calls Tcl_Exit */
     
     return ECL_NIL;
+}
+
+
+/**
+ * Process one ECL REPL iteration if input is available.
+ * Called from MGED's main event loop to keep the REPL responsive.
+ *
+ * @param s The MGED state
+ * @return 1 if a command was processed, 0 if no input available
+ */
+int
+ecl_repl_step(struct mged_state *s)
+{
+    cl_object result;
+    
+    if (!s) {
+	return 0;
+    }
+    
+    /* Call the Lisp function that does one REPL step */
+    ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
+	result = cl_eval(ecl_read_from_cstring("(mged-repl-step)"));
+    } ECL_CATCH_ALL_IF_CAUGHT {
+	bu_log("Error in ECL REPL step\n");
+	return 0;
+    } ECL_CATCH_ALL_END;
+    
+    /* Result is T if we processed something, NIL if no input */
+    return (result != ECL_NIL) ? 1 : 0;
 }
 
 
@@ -130,21 +209,22 @@ ecl_register_commands(struct mged_state *s)
 	return;
     }
 
-    /* Build export list for MGED package - collect all command names */
+    /* Build export list for MGED package - collect ALL command names */
     /* Shadow MGED commands that conflict with Common Lisp built-ins */
     bu_vls_strcpy(&exports, "(defpackage :mged (:use :cl) "
 	"(:shadow #:debug #:get #:set #:time #:search #:sleep #:push #:t) "
 	"(:export");
+    
+    /* Export ALL commands from mged_cmdtab */
     for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
-	if (ctp->ged_func == GED_FUNC_PTR_NULL)
-	    continue;
-	
-	/* Convert to uppercase */
+	/* Convert to uppercase and sanitize for Lisp (replace commas with hyphens) */
 	bu_vls_strcpy(&upper_name, ctp->name);
 	for (i = 0; i < bu_vls_strlen(&upper_name); i++) {
 	    char c = bu_vls_addr(&upper_name)[i];
 	    if (c >= 'a' && c <= 'z') {
 		bu_vls_addr(&upper_name)[i] = c - ('a' - 'A');
+	    } else if (c == ',') {
+		bu_vls_addr(&upper_name)[i] = '-';  /* Replace comma with hyphen for Lisp */
 	    }
 	}
 	
@@ -163,33 +243,49 @@ ecl_register_commands(struct mged_state *s)
 	return;
     } ECL_CATCH_ALL_END;
     
-    /* Switch to MGED package */
-    cl_eval(ecl_read_from_cstring("(in-package :mged)"));
+    /* Note: We do NOT switch to the MGED package here. This keeps users in CL-USER
+     * and requires them to use fully-qualified names like (mged:ls) instead of (ls).
+     * This prevents namespace pollution and follows Common Lisp best practices. */
 
     /* Store MGED state in ECL global variable (in MGED package) */
     {
-	cl_object state_sym = ecl_read_from_cstring("*MGED-STATE*");
+	cl_object state_sym = ecl_read_from_cstring("MGED::*MGED-STATE*");
 	cl_object state_ptr = ecl_make_unsigned_integer((uintptr_t)s);
 	cl_set(state_sym, state_ptr);
     }
 
-    /* Register the generic dispatcher as a C function */
+    /* Temporarily switch to MGED package to define dispatcher functions and commands there */
+    cl_eval(ecl_read_from_cstring("(in-package :mged)"));
+
+    /* Register the generic ged_exec dispatcher as a C function in MGED package */
     dispatcher_sym = ecl_read_from_cstring("ECL-MGED-DISPATCHER");
     ecl_def_c_function_va(dispatcher_sym, ecl_generic_mged_dispatcher, 1);
 
-    /* Iterate through mged_cmdtab and register each command in MGED package */
+    /* Register the custom command dispatcher as a C function in MGED package */
+    dispatcher_sym = ecl_read_from_cstring("ECL-MGED-CMD-DISPATCHER");
+    ecl_def_c_function_va(dispatcher_sym, ecl_mged_cmd_dispatcher, 1);
+
+    /* Iterate through mged_cmdtab and register ALL commands in MGED package */
     for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
+	const char *dispatcher_name;
 	
-	/* Skip commands without ged_exec_* functions (custom MGED functions) */
-	if (ctp->ged_func == GED_FUNC_PTR_NULL)
-	    continue;
+	/* Select dispatcher based on command type */
+	if (ctp->ged_func == GED_FUNC_PTR_NULL) {
+	    /* Custom MGED command (uses Tcl func) */
+	    dispatcher_name = "ecl-mged-cmd-dispatcher";
+	} else {
+	    /* Standard ged_exec command */
+	    dispatcher_name = "ecl-mged-dispatcher";
+	}
 	
-	/* Convert command name to uppercase for Lisp function name */
+	/* Convert command name to uppercase and sanitize for Lisp (replace commas with hyphens) */
 	bu_vls_strcpy(&upper_name, ctp->name);
 	for (i = 0; i < bu_vls_strlen(&upper_name); i++) {
 	    char c = bu_vls_addr(&upper_name)[i];
 	    if (c >= 'a' && c <= 'z') {
 		bu_vls_addr(&upper_name)[i] = c - ('a' - 'A');
+	    } else if (c == ',') {
+		bu_vls_addr(&upper_name)[i] = '-';  /* Replace comma with hyphen for Lisp */
 	    }
 	}
 	
@@ -197,8 +293,8 @@ ecl_register_commands(struct mged_state *s)
 	bu_vls_sprintf(&lisp_code,
 	    "(defun %s (&rest args) "
 	    "  \"MGED command: %s\" "
-	    "  (apply #'ecl-mged-dispatcher \"%s\" args))",
-	    bu_vls_addr(&upper_name), ctp->name, ctp->name);
+	    "  (apply #'%s \"%s\" args))",
+	    bu_vls_addr(&upper_name), ctp->name, dispatcher_name, ctp->name);
 	
 	/* Evaluate the Lisp code to define the function */
 	ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
@@ -209,7 +305,10 @@ ecl_register_commands(struct mged_state *s)
 	} ECL_CATCH_ALL_END;
     }
     
-    bu_log("Registered %d ECL commands in MGED package via dynamic dispatch\n", count);
+    /* Switch back to CL-USER package so the REPL starts in the default package */
+    cl_eval(ecl_read_from_cstring("(in-package :cl-user)"));
+    
+    bu_log("Registered %d total ECL commands in MGED package (ged_exec + custom)\n", count);
     bu_vls_free(&lisp_code);
     bu_vls_free(&upper_name);
     bu_vls_free(&exports);
@@ -220,14 +319,13 @@ ecl_register_commands(struct mged_state *s)
  * Start the ECL REPL for MGED.
  *
  * This function initializes ECL, registers all MGED commands, and
- * starts ECL's native REPL (si::tpl). When the user quits the REPL,
+ * starts ECL's native REPL (si::top-level). When the user quits the REPL,
  * this function exits the entire mged application.
  */
 void
 start_ecl_repl(struct mged_state *s)
 {
     char *argv[] = {"mged", NULL};
-    cl_object tpl_fn;
     
     if (!s) {
 	bu_log("ERROR: NULL mged_state passed to start_ecl_repl\n");
@@ -251,6 +349,13 @@ start_ecl_repl(struct mged_state *s)
     ecl_def_c_function(
 	ecl_read_from_cstring("MGED-QUIT"),
 	(cl_objectfn_fixed)ecl_quit_wrapper,
+	0  /* 0 arguments */
+    );
+
+    /* Register the stdin-ready checker as a callable ECL function */
+    ecl_def_c_function(
+	ecl_read_from_cstring("STDIN-READY"),
+	(cl_objectfn_fixed)ecl_stdin_ready,
 	0  /* 0 arguments */
     );
 
@@ -299,43 +404,37 @@ start_ecl_repl(struct mged_state *s)
 	"  (mged-quit))"
     ));
     
-    /* Use ECL's default debugger instead of custom error handler.
-     * A custom error handler was previously causing stack overflow when handling
-     * unknown REPL commands. ECL's native debugger provides better error handling
-     * and recovery options. */
-
-    /* Define MGED REPL wrapper that establishes MGED-TOPLEVEL restart.
-     * This restart allows users to return to the REPL from the debugger
-     * using (invoke-restart 'mged-toplevel), which was not possible with
-     * ECL's built-in RESTART-TOPLEVEL restart (it's only active during
-     * the dynamic extent of the top-level read-eval-print, not in the
-     * debugger's own REPL). */
+    /* Define the non-blocking REPL step function that processes one command if input is ready.
+     * Uses our C function stdin-ready instead of ECL's listen for reliable non-blocking check.
+     * This reuses ECL's existing REPL machinery (tpl-prompt, tpl-read, eval-with-env). */
     cl_eval(ecl_read_from_cstring(
-	"(defun mged-toplevel-repl () "
-	"  \"MGED ECL REPL with working toplevel restart\" "
-	"  (loop "
-	"    (restart-case "
-	"        (si::tpl) "
-	"      (mged-toplevel () "
-	"        :report \"Return to MGED ECL REPL\" "
-	"        (format t \"~&Returning to MGED REPL...~%\") "
-	"        (values)))))"
+	"(defun mged-repl-step () "
+	"  \"Do one REPL iteration if input is ready. Returns T if processed, NIL if no input.\" "
+	"  (when (stdin-ready) "
+	"    (setq +++ ++ ++ + + -) "
+	"    (si::tpl-prompt) "
+	"    (setq - (si::tpl-read)) "
+	"    (let ((values (multiple-value-list (si::eval-with-env - si::*break-env*)))) "
+	"      (setq /// // // / / values *** ** ** * * (car /)) "
+	"      (format cl::t \"~&~{~S~^~%~}~%\" values)) "
+	"    cl::t))"
     ));
-
-    /* Start the MGED REPL wrapper - this will block until user quits */
-    tpl_fn = ecl_read_from_cstring("MGED-TOPLEVEL-REPL");
-    ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
-	cl_funcall(1, tpl_fn);
-    } ECL_CATCH_ALL_IF_CAUGHT {
-	bu_log("ECL REPL exited with an error\n");
-    } ECL_CATCH_ALL_END;
-
-    /* Shutdown ECL */
-    bu_log("Shutting down ECL...\n");
-    cl_shutdown();
-
-    /* Exit mged */
-    exit(0);
+    
+    /* Initialize REPL state variables that tpl normally sets up */
+    cl_eval(ecl_read_from_cstring(
+	"(setq si::*tpl-level* 0 "
+	"      si::*ihs-base* (si::ihs-top) "
+	"      si::*ihs-top* (si::ihs-top) "
+	"      si::*ihs-current* (si::ihs-top) "
+	"      si::*break-env* nil)"
+    ));
+    
+    /* Print initial prompt */
+    cl_eval(ecl_read_from_cstring("(si::tpl-prompt)"));
+    
+    /* Note: We DON'T call si::top-level here. Instead, we return to mged.c's
+     * main event loop which will call mged-repl-step periodically to process
+     * ECL input while keeping the display responsive. */
 }
 
 #endif /* HAVE_ECL */

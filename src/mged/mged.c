@@ -2390,7 +2390,13 @@ main(int argc, char *argv[])
 	/* NOTREACHED */
     }
 
+#ifdef HAVE_ECL
+    /* Skip Tcl stdin handler when using ECL REPL - ECL handles stdin directly */
+    if ((s->classic_mged || !s->interactive) && 
+	!(extension_language && BU_STR_EQUAL(extension_language, "ecl"))) {
+#else
     if (s->classic_mged || !s->interactive) {
+#endif
 	struct stdio_data *sd;
 	BU_GET(sd, struct stdio_data);
 	sd->s = s;
@@ -2417,7 +2423,12 @@ main(int argc, char *argv[])
 	    clr_Echo(fileno(stdin));
 	}
 #endif
+#ifdef HAVE_ECL
+    /* Skip GUI pipe setup for ECL mode - ECL handles I/O directly */
+    } else if (!(extension_language && BU_STR_EQUAL(extension_language, "ecl"))) {
+#else
     } else {
+#endif
 	struct bu_vls vls = BU_VLS_INIT_ZERO;
 	int sout = fileno(stdout);
 	int serr = fileno(stderr);
@@ -2521,9 +2532,27 @@ main(int argc, char *argv[])
 #ifdef HAVE_ECL
     /* Check if ECL REPL was requested via -L ecl */
     if (extension_language && BU_STR_EQUAL(extension_language, "ecl")) {
-	/* Start ECL REPL - this never returns, exits mged when user quits */
+	/* Initialize ECL REPL (returns immediately to allow event loop integration) */
 	start_ecl_repl(s);
-	/* NOTREACHED */
+	
+	/**************** E C L   M A I N   L O O P *********************/
+	/* Event loop with ECL REPL integration.
+	 * This processes display events continuously while checking for ECL input. */
+	while (1) {
+	    /* Process one ECL REPL step if input is available (non-blocking) */
+	    ecl_repl_step(s);
+	    
+	    /* Process display and input events (ALWAYS non-blocking in ECL mode) */
+	    if ((rateflag = event_check(s, 1)) < 0)
+		break;
+	    
+	    /* Refresh the display to show any changes */
+	    refresh(s);
+	    
+	    /* Brief sleep to avoid busy-waiting when no input */
+	    bu_snooze(BU_SEC2USEC(0.01));  /* 10ms = ~100Hz event processing */
+	}
+	return 0;
     }
 #endif
 

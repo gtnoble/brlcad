@@ -53,7 +53,7 @@
 static struct mged_state *
 ecl_get_mged_state(void)
 {
-    cl_object state_sym = ecl_read_from_cstring("*MGED-STATE*");
+    cl_object state_sym = ecl_read_from_cstring("MGED::*MGED-STATE*");
     cl_object state_val = ecl_symbol_value(state_sym);
     
     if (ecl_unlikely(state_val == ECL_NIL)) {
@@ -137,7 +137,7 @@ ecl_signal_mged_error(const char *command_name, const char *error_message, int r
     cl_object error_type, cmd_key, msg_key, code_key;
     cl_object cmd_val, msg_val, code_val;
     
-    error_type = ecl_read_from_cstring("MGED-ERROR");
+    error_type = ecl_read_from_cstring("MGED::MGED-ERROR");
     cmd_key = ecl_read_from_cstring(":COMMAND");
     msg_key = ecl_read_from_cstring(":MESSAGE");
     code_key = ecl_read_from_cstring(":RETURN-CODE");
@@ -146,12 +146,73 @@ ecl_signal_mged_error(const char *command_name, const char *error_message, int r
     msg_val = ecl_make_simple_base_string((char *)error_message, -1);
     code_val = ecl_make_integer(return_code);
     
-    /* Signal the condition - this does not return */
+    /* Signal the condition - tecl_free_argvhis does not return */
     cl_error(7, error_type,
              cmd_key, cmd_val,
              msg_key, msg_val,
              code_key, code_val);
     /* NOTREACHED */
+}
+
+
+/**
+ * Extract and validate command name from ECL variadic arguments.
+ *
+ * This helper extracts the first argument from an ECL variadic argument list,
+ * validates it's a string, and converts it to a C string. The cmd_name_str
+ * output parameter keeps the ECL string object alive to prevent garbage collection.
+ *
+ * @param args ECL variadic argument list (position will be advanced)
+ * @param cmd_name_str Output: ECL string object (kept alive to prevent GC)
+ * @param error_context String identifying the caller for error messages
+ * @return C string pointer to command name (valid while cmd_name_str is alive)
+ */
+static const char *
+ecl_extract_command_name(cl_va_list args, cl_object *cmd_name_str, const char *error_context)
+{
+    cl_object cmd_name_obj;
+    
+    /* First argument is the command name */
+    cmd_name_obj = cl_va_arg(args);
+    
+    if (!ecl_stringp(cmd_name_obj)) {
+	ecl_signal_mged_error(error_context, "Command name must be a string", BRLCAD_ERROR);
+	/* NOTREACHED */
+    }
+    
+    /* Coerce to base-string and keep object alive throughout function.
+     * This prevents the GC from collecting the string while we use the pointer. */
+    *cmd_name_str = si_coerce_to_base_string(cmd_name_obj);
+    return ecl_base_string_pointer_safe(*cmd_name_str);
+}
+
+
+/**
+ * Prepend command name to argv array.
+ *
+ * Creates a new argv array with the command name as the first element,
+ * followed by copies of the original argv contents. The returned array
+ * is independent of the input argv.
+ *
+ * @param command_name Command name to prepend
+ * @param argc Number of arguments in original argv
+ * @param argv Original argv array (remains unchanged)
+ * @return New argv array with command name prepended (caller must free with ecl_free_argv)
+ */
+static char **
+ecl_prepend_command_name(const char *command_name, int argc, const char **argv)
+{
+    char **full_argv;
+    int i;
+    
+    full_argv = (char **)bu_calloc(argc + 2, sizeof(char *), "full_argv");
+    full_argv[0] = bu_strdup(command_name);
+    for (i = 0; i < argc; i++) {
+	full_argv[i + 1] = bu_strdup(argv[i]);
+    }
+    full_argv[argc + 1] = NULL;
+    
+    return full_argv;
 }
 
 
@@ -178,7 +239,6 @@ ecl_exec_mged_command(const char *command_name, cl_narg narg, cl_va_list args)
     char **full_argv = NULL;
     int ret;
     cl_object result = ECL_NIL;
-    int i;
     
     /* Get MGED state */
     s = ecl_get_mged_state();
@@ -194,16 +254,10 @@ ecl_exec_mged_command(const char *command_name, cl_narg narg, cl_va_list args)
     }
     
     /* Prepend command name to argv for ged_exec */
-    full_argv = (char **)bu_calloc(argc + 2, sizeof(char *), "full_argv");
-    full_argv[0] = bu_strdup(command_name);
-    for (i = 0; i < argc; i++) {
-	full_argv[i + 1] = argv[i];
-	argv[i] = NULL; /* Transfer ownership */
-    }
-    full_argv[argc + 1] = NULL;
+    full_argv = ecl_prepend_command_name(command_name, argc, (const char **)argv);
     
-    /* Free the old argv array (strings transferred to full_argv) */
-    bu_free(argv, "argv");
+    /* Free the original argv array */
+    ecl_free_argv(argc, argv);
     argv = NULL;
     
     /* Call the libged function through ged_exec */
@@ -250,7 +304,7 @@ cl_object
 ecl_generic_mged_dispatcher(cl_narg narg, ...)
 {
     cl_va_list args;
-    cl_object cmd_name_obj;
+    cl_object cmd_name_str;  /* Keep ECL object alive to prevent GC */
     const char *command_name;
     cl_object result;
     cl_narg actual_narg;
@@ -262,20 +316,8 @@ ecl_generic_mged_dispatcher(cl_narg narg, ...)
     
     cl_va_start(args, narg, narg, 0);
     
-    /* First argument is the command name */
-    cmd_name_obj = cl_va_arg(args);
-    
-    if (!ecl_stringp(cmd_name_obj)) {
-	cl_va_end(args);
-	ecl_signal_mged_error("dispatcher", "Command name must be a string", BRLCAD_ERROR);
-	/* NOTREACHED */
-    }
-    
-    /* Coerce to base-string, then extract C pointer */
-    {
-	cl_object base_str = si_coerce_to_base_string(cmd_name_obj);
-	command_name = ecl_base_string_pointer_safe(base_str);
-    }
+    /* Extract and validate command name */
+    command_name = ecl_extract_command_name(args, &cmd_name_str, "dispatcher");
     
     /* Remaining arguments are the actual command arguments */
     actual_narg = narg - 1;
@@ -286,6 +328,130 @@ ecl_generic_mged_dispatcher(cl_narg narg, ...)
     cl_va_end(args);
     
     return result;
+}
+
+
+/**
+ * Dispatcher for custom MGED commands (those with GED_FUNC_PTR_NULL).
+ * 
+ * Looks up the command in mged_cmdtab and calls its tcl_func handler.
+ * This allows all ~150 custom MGED commands to work in ECL without
+ * individual wrapper functions.
+ *
+ * @param narg Number of arguments (including command name)
+ * @param ... Variadic ECL arguments
+ * @return ECL string containing command result, or NIL if no output
+ */
+cl_object
+ecl_mged_cmd_dispatcher(cl_narg narg, ...)
+{
+    cl_va_list args;
+    cl_object cmd_name_str;  /* Keep ECL object alive to prevent GC */
+    const char *command_name;
+    struct mged_state *s;
+    struct cmdtab *ctp;
+    int argc;
+    char **argv = NULL;
+    char **full_argv = NULL;
+    int ret;
+    int found = 0;
+    cl_object ecl_result = ECL_NIL;
+    
+    /* Forward declaration from setup.c */
+    extern struct cmdtab mged_cmdtab[];
+    
+    if (narg < 1) {
+        ecl_signal_mged_error("mged-cmd-dispatcher", "No command name provided", BRLCAD_ERROR);
+        /* NOTREACHED */
+    }
+    
+    cl_va_start(args, narg, narg, 0);
+    
+    /* Extract and validate command name */
+    command_name = ecl_extract_command_name(args, &cmd_name_str, "mged-cmd-dispatcher");
+    
+    /* Get MGED state */
+    s = ecl_get_mged_state();
+    if (!s || !s->interp) {
+        cl_va_end(args);
+        ecl_signal_mged_error(command_name, "MGED state not initialized", BRLCAD_ERROR);
+        /* NOTREACHED */
+    }
+    
+    /* Look up command in mged_cmdtab */
+    for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
+        if (BU_STR_EQUAL(ctp->name, command_name)) {
+            found = 1;
+            break;
+        }
+    }
+    
+    if (!found) {
+        cl_va_end(args);
+        ecl_signal_mged_error(command_name, "Command not found in mged_cmdtab", BRLCAD_ERROR);
+        /* NOTREACHED */
+    }
+    
+    /* Remaining arguments are the actual command arguments */
+    cl_narg actual_narg = narg - 1;
+    
+    /* Convert arguments */
+    if (ecl_args_to_argv(actual_narg, args, &argc, &argv) != BRLCAD_OK) {
+        cl_va_end(args);
+        ecl_signal_mged_error(command_name, "Failed to convert arguments", BRLCAD_ERROR);
+        /* NOTREACHED */
+    }
+    
+    /* Prepend command name */
+    full_argv = ecl_prepend_command_name(command_name, argc, (const char **)argv);
+    
+    /* Free the original argv array */
+    ecl_free_argv(argc, argv);
+    
+    /* Save full_argv pointers before calling tcl_func, which may modify them.
+     * Many Tcl command handlers modify the argv array (e.g., cmd_blast changes
+     * argv[0] from "B" to "draw"). If we don't save our original allocations,
+     * we'll: 1) try to free memory we don't own (crash), and 2) leak our
+     * original allocations. */
+    char **saved_argv = (char **)bu_calloc(argc + 2, sizeof(char *), "saved_argv");
+    for (int i = 0; i <= argc; i++) {  /* Include argv[argc] which may be NULL */
+        saved_argv[i] = full_argv[i];
+    }
+    saved_argv[argc + 1] = NULL;
+    
+    /* Set up cmdtab with current state */
+    ctp->s = s;
+    
+    /* Call MGED command's tcl_func (may modify full_argv) */
+    ret = ctp->tcl_func((ClientData)ctp, s->interp, argc + 1, (const char **)full_argv);
+    
+    /* Get result from Tcl interpreter */
+    const char *result = Tcl_GetStringResult(s->interp);
+    
+    /* Free our ORIGINAL allocations, not what tcl_func may have substituted */
+    ecl_free_argv(argc + 1, saved_argv);
+    
+    /* Free the full_argv array itself (but not the strings, since tcl_func may have replaced them) */
+    bu_free(full_argv, "full_argv array");
+    
+    cl_va_end(args);
+    
+    if (ret != TCL_OK) {
+        /* Use the error message from Tcl interpreter */
+        const char *error_msg = result ? result : "Command failed";
+        ecl_signal_mged_error(command_name, error_msg, ret);
+        /* NOTREACHED - ecl_signal_mged_error never returns */
+    }
+    
+    /* Convert result to ECL string */
+    if (result && strlen(result) > 0) {
+        ecl_result = ecl_make_simple_base_string((char *)result, -1);
+    }
+    
+    /* Reset Tcl result after extracting it */
+    Tcl_ResetResult(s->interp);
+    
+    return ecl_result;
 }
 
 

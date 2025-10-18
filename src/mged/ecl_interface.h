@@ -40,13 +40,26 @@ __BEGIN_DECLS
  * Start the ECL REPL for MGED.
  *
  * This function initializes ECL, registers all MGED commands as ECL
- * functions, and starts ECL's native REPL (si::tpl). The function
- * will not return until the user quits the REPL, at which point
- * it will exit the entire mged application.
+ * functions, and sets up the ECL REPL state. Unlike the original blocking
+ * implementation, this function returns to allow integration with MGED's
+ * event loop. Call ecl_repl_step() periodically to process ECL input.
  *
  * @param s MGED state structure containing database and view information
  */
 void start_ecl_repl(struct mged_state *s);
+
+/**
+ * Process one ECL REPL iteration if input is available.
+ *
+ * This function should be called periodically from MGED's main event loop.
+ * It checks if stdin has input available and processes one read-eval-print
+ * cycle if so. This keeps the ECL REPL responsive without blocking the
+ * display event processing.
+ *
+ * @param s MGED state structure
+ * @return 1 if a command was processed, 0 if no input was available
+ */
+int ecl_repl_step(struct mged_state *s);
 
 /**
  * Register all MGED commands as ECL functions.
