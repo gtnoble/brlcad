@@ -62,11 +62,17 @@
 extern void mged_finish(struct mged_state *s, int exitcode);
 
 /* Forward declarations from ecl_cmds.c */
-extern cl_object ecl_generic_mged_dispatcher(cl_narg narg, ...);
-extern cl_object ecl_mged_cmd_dispatcher(cl_narg narg, ...);
+extern cl_object ecl_call_ged_exec(cl_object cmd_name, cl_object args_list);
+extern cl_object ecl_call_tcl_func(cl_object cmd_name, cl_object args_list);
 
 /* Forward declaration for mged_cmdtab from setup.c */
 extern struct cmdtab mged_cmdtab[];
+
+/* Forward declarations for ECL-generated init functions from compiled Lisp files */
+extern void init_mged_repl(cl_object);
+extern void init_mged_init(cl_object);
+extern void init_mged_commands(cl_object);
+extern void init_mged_api(cl_object);
 
 
 /**
@@ -86,6 +92,92 @@ ecl_get_mged_state(void)
     }
 
     return (struct mged_state *)(uintptr_t)ecl_to_unsigned_integer(state_val);
+}
+
+
+/**
+ * Get the count of commands in mged_cmdtab.
+ *
+ * @return Number of commands (not including NULL terminator)
+ */
+static cl_object
+ecl_cmdtab_count(void)
+{
+    struct cmdtab *ctp;
+    int count = 0;
+    
+    for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
+	count++;
+    }
+    
+    return ecl_make_integer(count);
+}
+
+
+/**
+ * Get the name of a command at the specified index.
+ *
+ * @param index_obj ECL integer object specifying the index
+ * @return ECL string containing the command name, or NIL if out of bounds
+ */
+static cl_object
+ecl_cmdtab_get_name(cl_object index_obj)
+{
+    int index;
+    struct cmdtab *ctp;
+    
+    if (!cl_integerp(index_obj)) {
+	return ECL_NIL;
+    }
+    
+    index = ecl_to_int(index_obj);
+    if (index < 0) {
+	return ECL_NIL;
+    }
+    
+    /* Navigate to the specified index */
+    ctp = &mged_cmdtab[index];
+    
+    /* Check if we're past the end of the table */
+    if (ctp->name == NULL) {
+	return ECL_NIL;
+    }
+    
+    return ecl_make_simple_base_string((char *)ctp->name, -1);
+}
+
+
+/**
+ * Check if a command at the specified index is a custom command.
+ *
+ * @param index_obj ECL integer object specifying the index
+ * @return ECL T if custom command (ged_func is NULL), NIL otherwise
+ */
+static cl_object
+ecl_cmdtab_is_custom(cl_object index_obj)
+{
+    int index;
+    struct cmdtab *ctp;
+    
+    if (!cl_integerp(index_obj)) {
+	return ECL_NIL;
+    }
+    
+    index = ecl_to_int(index_obj);
+    if (index < 0) {
+	return ECL_NIL;
+    }
+    
+    /* Navigate to the specified index */
+    ctp = &mged_cmdtab[index];
+    
+    /* Check if we're past the end of the table */
+    if (ctp->name == NULL) {
+	return ECL_NIL;
+    }
+    
+    /* Return T if ged_func is NULL (custom command), NIL otherwise */
+    return (ctp->ged_func == GED_FUNC_PTR_NULL) ? ECL_T : ECL_NIL;
 }
 
 
@@ -185,10 +277,9 @@ ecl_repl_step(struct mged_state *s)
 /**
  * Register all MGED commands as ECL functions.
  *
- * Iterates through mged_cmdtab and dynamically creates Lisp wrapper
- * functions for each command with a ged_exec_* function. This approach
- * eliminates the need for per-command wrapper functions and automatically
- * includes new commands added to setup.c.
+ * Delegates to Lisp code which uses C helper functions to iterate through
+ * mged_cmdtab and register all commands. This approach keeps the complex
+ * package management and function generation logic in Lisp.
  *
  * All commands are registered in the MGED package to avoid conflicts with
  * Common Lisp built-in functions (e.g., DEBUG).
@@ -196,122 +287,38 @@ ecl_repl_step(struct mged_state *s)
 void
 ecl_register_commands(struct mged_state *s)
 {
-    struct cmdtab *ctp;
-    int count = 0;
-    struct bu_vls lisp_code = BU_VLS_INIT_ZERO;
-    struct bu_vls upper_name = BU_VLS_INIT_ZERO;
-    struct bu_vls exports = BU_VLS_INIT_ZERO;
-    cl_object dispatcher_sym;
-    size_t i;
+    cl_object state_ptr;
+    cl_object result;
+    int count;
     
     if (!s) {
 	bu_log("ERROR: NULL mged_state passed to ecl_register_commands\n");
 	return;
     }
 
-    /* Build export list for MGED package - collect ALL command names */
-    /* Shadow MGED commands that conflict with Common Lisp built-ins */
-    bu_vls_strcpy(&exports, "(defpackage :mged (:use :cl) "
-	"(:shadow #:debug #:get #:set #:time #:search #:sleep #:push #:t) "
-	"(:export");
+    /* Register the C FFI functions in CL-USER package */
+    ecl_def_c_function(
+	ecl_read_from_cstring("CL-USER::CALL-GED-EXEC"),
+	(cl_objectfn_fixed)ecl_call_ged_exec,
+	2);  /* 2 arguments: cmd_name, args_list */
+    ecl_def_c_function(
+	ecl_read_from_cstring("CL-USER::CALL-TCL-FUNC"),
+	(cl_objectfn_fixed)ecl_call_tcl_func,
+	2);  /* 2 arguments: cmd_name, args_list */
+
+    /* Convert state pointer to ECL object */
+    state_ptr = ecl_make_unsigned_integer((uintptr_t)s);
     
-    /* Export ALL commands from mged_cmdtab */
-    for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
-	/* Convert to uppercase and sanitize for Lisp (replace commas with hyphens) */
-	bu_vls_strcpy(&upper_name, ctp->name);
-	for (i = 0; i < bu_vls_strlen(&upper_name); i++) {
-	    char c = bu_vls_addr(&upper_name)[i];
-	    if (c >= 'a' && c <= 'z') {
-		bu_vls_addr(&upper_name)[i] = c - ('a' - 'A');
-	    } else if (c == ',') {
-		bu_vls_addr(&upper_name)[i] = '-';  /* Replace comma with hyphen for Lisp */
-	    }
-	}
-	
-	bu_vls_printf(&exports, " #:%s", bu_vls_addr(&upper_name));
-    }
-    bu_vls_strcat(&exports, "))");
-    
-    /* Create MGED package with all command exports */
+    /* Call Lisp function to set up MGED environment and register all commands */
     ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
-	cl_eval(ecl_read_from_cstring(bu_vls_addr(&exports)));
+	result = cl_funcall(2,
+	    ecl_read_from_cstring("CL-USER::SETUP-MGED-ECL"),
+	    state_ptr);
+	count = ecl_to_int(result);
+	bu_log("Registered %d ECL commands in MGED package\n", count);
     } ECL_CATCH_ALL_IF_CAUGHT {
-	bu_log("ERROR: Failed to create MGED package\n");
-	bu_vls_free(&lisp_code);
-	bu_vls_free(&upper_name);
-	bu_vls_free(&exports);
-	return;
+	bu_log("ERROR: Failed to register MGED commands\n");
     } ECL_CATCH_ALL_END;
-    
-    /* Note: We do NOT switch to the MGED package here. This keeps users in CL-USER
-     * and requires them to use fully-qualified names like (mged:ls) instead of (ls).
-     * This prevents namespace pollution and follows Common Lisp best practices. */
-
-    /* Store MGED state in ECL global variable (in MGED package) */
-    {
-	cl_object state_sym = ecl_read_from_cstring("MGED::*MGED-STATE*");
-	cl_object state_ptr = ecl_make_unsigned_integer((uintptr_t)s);
-	cl_set(state_sym, state_ptr);
-    }
-
-    /* Temporarily switch to MGED package to define dispatcher functions and commands there */
-    cl_eval(ecl_read_from_cstring("(in-package :mged)"));
-
-    /* Register the generic ged_exec dispatcher as a C function in MGED package */
-    dispatcher_sym = ecl_read_from_cstring("ECL-MGED-DISPATCHER");
-    ecl_def_c_function_va(dispatcher_sym, ecl_generic_mged_dispatcher, 1);
-
-    /* Register the custom command dispatcher as a C function in MGED package */
-    dispatcher_sym = ecl_read_from_cstring("ECL-MGED-CMD-DISPATCHER");
-    ecl_def_c_function_va(dispatcher_sym, ecl_mged_cmd_dispatcher, 1);
-
-    /* Iterate through mged_cmdtab and register ALL commands in MGED package */
-    for (ctp = mged_cmdtab; ctp->name != NULL; ctp++) {
-	const char *dispatcher_name;
-	
-	/* Select dispatcher based on command type */
-	if (ctp->ged_func == GED_FUNC_PTR_NULL) {
-	    /* Custom MGED command (uses Tcl func) */
-	    dispatcher_name = "ecl-mged-cmd-dispatcher";
-	} else {
-	    /* Standard ged_exec command */
-	    dispatcher_name = "ecl-mged-dispatcher";
-	}
-	
-	/* Convert command name to uppercase and sanitize for Lisp (replace commas with hyphens) */
-	bu_vls_strcpy(&upper_name, ctp->name);
-	for (i = 0; i < bu_vls_strlen(&upper_name); i++) {
-	    char c = bu_vls_addr(&upper_name)[i];
-	    if (c >= 'a' && c <= 'z') {
-		bu_vls_addr(&upper_name)[i] = c - ('a' - 'A');
-	    } else if (c == ',') {
-		bu_vls_addr(&upper_name)[i] = '-';  /* Replace comma with hyphen for Lisp */
-	    }
-	}
-	
-	/* Create a Lisp wrapper function in MGED package */
-	bu_vls_sprintf(&lisp_code,
-	    "(defun %s (&rest args) "
-	    "  \"MGED command: %s\" "
-	    "  (apply #'%s \"%s\" args))",
-	    bu_vls_addr(&upper_name), ctp->name, dispatcher_name, ctp->name);
-	
-	/* Evaluate the Lisp code to define the function */
-	ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
-	    cl_eval(ecl_read_from_cstring(bu_vls_addr(&lisp_code)));
-	    count++;
-	} ECL_CATCH_ALL_IF_CAUGHT {
-	    bu_log("Warning: Failed to register command '%s'\n", ctp->name);
-	} ECL_CATCH_ALL_END;
-    }
-    
-    /* Switch back to CL-USER package so the REPL starts in the default package */
-    cl_eval(ecl_read_from_cstring("(in-package :cl-user)"));
-    
-    bu_log("Registered %d total ECL commands in MGED package (ged_exec + custom)\n", count);
-    bu_vls_free(&lisp_code);
-    bu_vls_free(&upper_name);
-    bu_vls_free(&exports);
 }
 
 
@@ -342,9 +349,8 @@ start_ecl_repl(struct mged_state *s)
     cl_eval(ecl_read_from_cstring("(si::set-limit 'c-stack 33554432)"));
     cl_eval(ecl_read_from_cstring("(si::set-limit 'lisp-stack 33554432)"));
 
-    /* Register all MGED commands as ECL functions */
-    ecl_register_commands(s);
-
+    /* Register C helper functions that Lisp will use */
+    
     /* Register the quit wrapper as a callable ECL function */
     ecl_def_c_function(
 	ecl_read_from_cstring("MGED-QUIT"),
@@ -358,6 +364,23 @@ start_ecl_repl(struct mged_state *s)
 	(cl_objectfn_fixed)ecl_stdin_ready,
 	0  /* 0 arguments */
     );
+    
+    /* Register cmdtab helper functions for Lisp */
+    ecl_def_c_function(
+	ecl_read_from_cstring("CMDTAB-COUNT"),
+	(cl_objectfn_fixed)ecl_cmdtab_count,
+	0  /* 0 arguments */
+    );
+    ecl_def_c_function(
+	ecl_read_from_cstring("CMDTAB-GET-NAME"),
+	(cl_objectfn_fixed)ecl_cmdtab_get_name,
+	1  /* 1 argument: index */
+    );
+    ecl_def_c_function(
+	ecl_read_from_cstring("CMDTAB-IS-CUSTOM"),
+	(cl_objectfn_fixed)ecl_cmdtab_is_custom,
+	1  /* 1 argument: index */
+    );
 
     /* Restore terminal to normal mode for ECL REPL */
     /* MGED disables echo with clr_Echo() for its own command-line editing,
@@ -366,68 +389,25 @@ start_ecl_repl(struct mged_state *s)
     reset_Tty(fileno(stdin));  /* Restore line mode and echo */
 #endif
 
-    /* Set up I/O streams properly for interactive REPL */
-    /* Ensure standard streams are properly connected */
-    cl_eval(ecl_read_from_cstring("(progn \
-	(setf *standard-input* *terminal-io*) \
-	(setf *standard-output* *terminal-io*) \
-	(setf *error-output* *terminal-io*) \
-	(setf *query-io* *terminal-io*) \
-	(setf *debug-io* *terminal-io*))"));
+    /* Load compiled Lisp modules FIRST - they define functions like SETUP-MGED-ECL.
+     * These files are compiled at build time and linked into the binary.
+     * We must call the C-level init functions that ECL generated during compilation.
+     * This registers all Lisp code (functions, variables, conditions, etc.) with ECL. */
+    ecl_init_module(NULL, init_mged_init);
+    ecl_init_module(NULL, init_mged_commands);
+    ecl_init_module(NULL, init_mged_repl);
+    ecl_init_module(NULL, init_mged_api);
 
-    /* Define MGED-ERROR condition type for command failures */
-    cl_eval(ecl_read_from_cstring(
-	"(define-condition mged-error (error) "
-	"  ((command :initarg :command :reader mged-error-command) "
-	"   (message :initarg :message :reader mged-error-message) "
-	"   (return-code :initarg :return-code :reader mged-error-return-code)) "
-	"  (:report (lambda (condition stream) "
-	"             (format stream \"MGED command '~A' failed: ~A\" "
-	"                     (mged-error-command condition) "
-	"                     (mged-error-message condition)))))"
-    ));
-
-    /* Define quit and exit functions that call MGED's proper cleanup path.
-     * These call the registered MGED-QUIT function which invokes mged_finish()
-     * for proper cleanup (closing database, releasing displays, etc.) before exit. */
-    cl_eval(ecl_read_from_cstring(
-	"(defun quit (&optional (status 0)) "
-	"  \"Exit MGED with proper cleanup.\" "
-	"  (declare (ignore status)) "
-	"  (mged-quit))"
-    ));
+    /* Now register all MGED commands as ECL functions (calls SETUP-MGED-ECL in Lisp) */
+    ecl_register_commands(s);
     
-    cl_eval(ecl_read_from_cstring(
-	"(defun exit (&optional (status 0)) "
-	"  \"Exit MGED with proper cleanup.\" "
-	"  (declare (ignore status)) "
-	"  (mged-quit))"
-    ));
-    
-    /* Define the non-blocking REPL step function that processes one command if input is ready.
-     * Uses our C function stdin-ready instead of ECL's listen for reliable non-blocking check.
-     * This reuses ECL's existing REPL machinery (tpl-prompt, tpl-read, eval-with-env). */
-    cl_eval(ecl_read_from_cstring(
-	"(defun mged-repl-step () "
-	"  \"Do one REPL iteration if input is ready. Returns T if processed, NIL if no input.\" "
-	"  (when (stdin-ready) "
-	"    (setq +++ ++ ++ + + -) "
-	"    (si::tpl-prompt) "
-	"    (setq - (si::tpl-read)) "
-	"    (let ((values (multiple-value-list (si::eval-with-env - si::*break-env*)))) "
-	"      (setq /// // // / / values *** ** ** * * (car /)) "
-	"      (format cl::t \"~&~{~S~^~%~}~%\" values)) "
-	"    cl::t))"
-    ));
-    
-    /* Initialize REPL state variables that tpl normally sets up */
-    cl_eval(ecl_read_from_cstring(
-	"(setq si::*tpl-level* 0 "
-	"      si::*ihs-base* (si::ihs-top) "
-	"      si::*ihs-top* (si::ihs-top) "
-	"      si::*ihs-current* (si::ihs-top) "
-	"      si::*break-env* nil)"
-    ));
+    /* Initialize MGED environment (I/O streams, REPL state, conditions, quit/exit functions) */
+    ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
+	cl_funcall(1, ecl_read_from_cstring("INIT-MGED-ENVIRONMENT"));
+    } ECL_CATCH_ALL_IF_CAUGHT {
+	bu_log("ERROR: Failed to initialize MGED environment\n");
+	exit(1);
+    } ECL_CATCH_ALL_END;
     
     /* Print initial prompt */
     cl_eval(ecl_read_from_cstring("(si::tpl-prompt)"));

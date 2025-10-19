@@ -1,0 +1,4 @@
+Add top-level repl commands like `:q` etc.
+Add top-level REPL condition restart
+Need to test out the new mged functions.
+Create "Lispy" wrappers for MGED:: functions
