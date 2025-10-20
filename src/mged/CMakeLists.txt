@@ -106,6 +106,18 @@ if(BRLCAD_ENABLE_ECL AND ECL_FOUND)
     COMMENT "Compiling mged_repl.lisp with ECL to static library"
   )
   
+  # Compile mged_math.lisp to static library using ECL
+  add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libmged_math.a
+    COMMAND ${ECL_EXECUTABLE} -load ${CMAKE_CURRENT_SOURCE_DIR}/compile_lisp.lisp
+            -- ${CMAKE_CURRENT_SOURCE_DIR}/mged_math.lisp
+            ${CMAKE_CURRENT_BINARY_DIR}/libmged_math.a
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/mged_math.lisp
+            ${CMAKE_CURRENT_SOURCE_DIR}/compile_lisp.lisp
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Compiling mged_math.lisp with ECL to static library"
+  )
+  
   # Compile mged_api.lisp to static library using ECL
   add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libmged_api.a
@@ -131,6 +143,10 @@ if(BRLCAD_ENABLE_ECL AND ECL_FOUND)
   set_target_properties(mged_repl_lib PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/libmged_repl.a)
   
+  add_library(mged_math_lib STATIC IMPORTED GLOBAL)
+  set_target_properties(mged_math_lib PROPERTIES
+    IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/libmged_math.a)
+  
   add_library(mged_api_lib STATIC IMPORTED GLOBAL)
   set_target_properties(mged_api_lib PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/libmged_api.a)
@@ -147,6 +163,10 @@ if(BRLCAD_ENABLE_ECL AND ECL_FOUND)
   add_custom_target(mged_repl_build
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libmged_repl.a)
   add_dependencies(mged_repl_lib mged_repl_build)
+  
+  add_custom_target(mged_math_build
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libmged_math.a)
+  add_dependencies(mged_math_lib mged_math_build)
   
   add_custom_target(mged_api_build
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libmged_api.a)
@@ -190,8 +210,8 @@ if(BRLCAD_ENABLE_TCL)
   if(BRLCAD_ENABLE_ECL AND ECL_FOUND)
     target_compile_definitions(mged PRIVATE HAVE_ECL=1)
     target_include_directories(mged PRIVATE ${ECL_INCLUDE_DIRS})
-    target_link_libraries(mged mged_init_lib mged_commands_lib mged_repl_lib mged_api_lib ${ECL_LIBRARIES})
-    add_dependencies(mged mged_init_build mged_commands_build mged_repl_build mged_api_build)
+    target_link_libraries(mged mged_math_lib mged_init_lib mged_commands_lib mged_repl_lib mged_api_lib ${ECL_LIBRARIES})
+    add_dependencies(mged mged_math_build mged_init_build mged_commands_build mged_repl_build mged_api_build)
   endif(BRLCAD_ENABLE_ECL AND ECL_FOUND)
   
   add_target_deps(mged Tkhtml Tktable itcl_pkgIndex itk_pkgIndex TclIndexBld dm_plugins)

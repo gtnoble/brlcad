@@ -73,6 +73,7 @@ extern void init_mged_repl(cl_object);
 extern void init_mged_init(cl_object);
 extern void init_mged_commands(cl_object);
 extern void init_mged_api(cl_object);
+extern void init_mged_math(cl_object);
 
 
 /**
@@ -397,6 +398,7 @@ start_ecl_repl(struct mged_state *s)
     ecl_init_module(NULL, init_mged_commands);
     ecl_init_module(NULL, init_mged_repl);
     ecl_init_module(NULL, init_mged_api);
+    ecl_init_module(NULL, init_mged_math);
 
     /* Now register all MGED commands as ECL functions (calls SETUP-MGED-ECL in Lisp) */
     ecl_register_commands(s);
