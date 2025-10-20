@@ -69,6 +69,16 @@
    #:quick-preview
    #:high-quality-render
    
+   ;; Attribute Management
+   #:get-attributes
+   #:set-attributes
+   #:remove-attributes
+   #:append-attributes
+   #:list-attribute-types
+   #:show-attributes
+   #:sort-attributes
+   #:copy-attribute
+   
    ;; Utilities
    #:vector->string
    #:color->string))
@@ -266,12 +276,14 @@
   
   Arguments:
     NAME - String name of the object
-    :ATTRIBUTES - If T, also return attributes
+    :ATTRIBUTES - If T, also return attributes as structured data
   
   Returns:
-    String containing object information, or NIL on error"
+    - If ATTRIBUTES is NIL: String containing object information
+    - If ATTRIBUTES is T: plist of attribute-name -> value pairs
+    - NIL on error"
   (if attributes
-      (mged:attr "get" name)
+      (get-attributes name)
       (mged:get name)))
 
 ;;;; ============================================================================
@@ -564,7 +576,7 @@
     
     ;; Set region ID if provided
     (when id
-      (mged:attr "set" name "region_id" (princ-to-string id)))
+      (set-attributes name `(("region_id" . ,(princ-to-string id)))))
     
     ;; Set color if provided
     (when color
@@ -838,6 +850,338 @@
       (if (vectorp factor)
           (mged:sca (aref factor 0) (aref factor 1) (aref factor 2))
           (mged:sca factor))))
+
+;;;; ============================================================================
+;;;; Attribute Management Utility Functions
+;;;; ============================================================================
+
+(defun parse-attribute-output (output &key single-object-p)
+  "Parse attribute command output into structured data.
+   
+   Arguments:
+     OUTPUT - String output from attr command
+     SINGLE-OBJECT-P - If T, parse for single object (returns plist)
+                      If NIL, parse for multiple objects (returns list of plists)
+   
+   Returns:
+     - Single object: plist of attribute-name -> value pairs
+     - Multiple objects: list of (object-name . attribute-plist) pairs"
+  (when output
+    (let ((lines (split-lines output)))
+      (remove-if #'null
+                 (mapcar (lambda (line)
+                           (when (and line (plusp (length line)))
+                             (let ((trimmed (string-trim " " line)))
+                               (if single-object-p
+                                   ;; Parse single object: attr_name value
+                                   (let ((pos (position #\Space trimmed)))
+                                     (when pos
+                                       (let ((attr-name (subseq trimmed 0 pos))
+                                             (attr-value (subseq trimmed (1+ pos))))
+                                         (list (intern (string-upcase attr-name) :keyword) 
+                                               attr-value))))
+                                   ;; Parse multiple objects: object_name attr_name value
+                                   (let* ((parts (split-string-by-whitespace trimmed))
+                                          (object-name (first parts))
+                                          (attr-name (second parts))
+                                          (attr-value (third parts)))
+                                     (when (and object-name attr-name attr-value)
+                                       (cons object-name
+                                             (list (intern (string-upcase attr-name) :keyword)
+                                                   attr-value)))))))
+                         lines))))))
+
+(defun normalize-attribute-pairs (attributes)
+  "Normalize attribute specifications to a list of (name . value) pairs.
+   
+   Arguments:
+     ATTRIBUTES - Can be:
+                  - Alist of (name . value) pairs
+                  - Plist of name value name value...
+                  - List of two-element lists ((name value) ...)
+   
+   Returns:
+     List of (name . value) cons pairs"
+  (when attributes
+    (etypecase attributes
+      (list
+       (cond
+         ;; Check if it's an alist (first element is a cons)
+         ((and (first attributes) (consp (first attributes)))
+          (mapcar (lambda (pair)
+                    (if (consp pair)
+                        pair
+                        (error "Invalid attribute pair: ~A" pair)))
+                  attributes))
+         ;; Check if it's a plist (even number of elements, first is not a cons)
+         ((evenp (length attributes))
+          (loop for (name value) on attributes by #'cddr
+                collect (cons name value)))
+         (t
+          (error "Attribute list must have even number of elements or be an alist")))
+       (t
+        (error "Attributes must be a list"))))))
+
+(defun build-attribute-args (attribute-pairs)
+  "Convert attribute pairs to flat argument list for attr command.
+   
+   Arguments:
+     ATTRIBUTE-PAIRS - List of (name . value) cons pairs
+   
+   Returns:
+     Flat list of name value name value..."
+  (when attribute-pairs
+    (mapcan (lambda (pair)
+              (list (car pair) (cdr pair)))
+            attribute-pairs)))
+
+;;;; ============================================================================
+;;;; Attribute Management Functions
+;;;; ============================================================================
+
+(defun get-attributes (object-pattern &key attribute-names all-attributes)
+  "Retrieve attributes from objects matching the pattern.
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+   
+   Keyword arguments:
+     :ATTRIBUTE-NAMES - List of specific attribute names to retrieve
+     :ALL-ATTRIBUTES - If T, retrieve all attributes (default when no specific names)
+   
+   Returns:
+     - Single object match: plist of attribute-name -> value pairs
+     - Multiple object matches: list of (object-name . attribute-plist) pairs
+     - NIL if no objects match or no attributes found
+   
+   Examples:
+     ;; Get all attributes for a single object
+     (get-attributes \"region1\")
+     ;; => (:MATERIAL-ID \"10\" :REGION \"R\" :LOS \"100\")
+     
+     ;; Get specific attributes
+     (get-attributes \"region1\" :attribute-names '(\"material_id\" \"color\"))
+     ;; => (:MATERIAL-ID \"10\" :COLOR \"255/0/0\")
+     
+     ;; Get attributes from multiple objects
+     (get-attributes \"region*\")
+     ;; => ((\"region1\" (:MATERIAL-ID \"10\" :REGION \"R\"))
+     ;;     (\"region2\" (:MATERIAL-ID \"20\" :REGION \"R\")))"
+  
+  (let* ((attr-names (or attribute-names 
+                        (when all-attributes '("*"))
+                        '("*")))
+         (args (append '("get") (list object-pattern) attr-names))
+         (result (apply #'mged:attr args))
+         (parsed (parse-attribute-output result :single-object-p nil)))
+    
+    ;; Group attributes by object
+    (if (null parsed)
+        nil
+        (let ((object-groups (make-hash-table :test 'equal)))
+          ;; Group attributes by object name
+          (dolist (item parsed)
+            (let* ((object-name (car item))
+                   (attr-pair (cdr item))
+                   (existing-attrs (gethash object-name object-groups)))
+              (setf (gethash object-name object-groups)
+                    (append existing-attrs attr-pair))))
+          
+          ;; Convert to appropriate return format
+          (let ((objects (loop for key being the hash-keys of object-groups
+                               collect key)))
+            (if (= (length objects) 1)
+                ;; Single object - return plist
+                (gethash (first objects) object-groups)
+                ;; Multiple objects - return list of pairs
+                (mapcar (lambda (obj-name)
+                          (cons obj-name (gethash obj-name object-groups)))
+                        objects)))))))
+
+(defun set-attributes (object-pattern attributes &key create-if-missing)
+  "Set attribute values on objects matching the pattern.
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+     ATTRIBUTES - Attribute specifications (alist, plist, or list of pairs)
+   
+   Keyword arguments:
+     :CREATE-IF-MISSING - If T, create objects if they don't exist (not implemented)
+   
+   Returns:
+     Result string from attr set command, or NIL on error
+   
+   Examples:
+     ;; Set attributes using alist
+     (set-attributes \"region1\" '((\"material_id\" . \"10\") (\"color\" . \"255/0/0\")))
+     
+     ;; Set attributes using plist
+     (set-attributes \"region2\" \"material_id\" \"20\" \"color\" \"0/255/0\")
+     
+     ;; Set attributes on multiple objects
+     (set-attributes \"region*\" '((\"region\" . \"R\") (\"los\" . \"100\")))"
+  
+  (let* ((attr-pairs (normalize-attribute-pairs attributes))
+         (attr-args (build-attribute-args attr-pairs))
+         (args (append '("set") (list object-pattern) attr-args)))
+    (apply #'mged:attr args)))
+
+(defun remove-attributes (object-pattern attribute-names &key quiet)
+  "Remove specified attributes from objects matching the pattern.
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+     ATTRIBUTE-NAMES - String or list of attribute names to remove
+   
+   Keyword arguments:
+     :QUIET - If T, suppress error messages for non-existent attributes
+   
+   Returns:
+     Result string from attr rm command, or NIL on error
+   
+   Examples:
+     ;; Remove single attribute
+     (remove-attributes \"region1\" \"temp_attr\")
+     
+     ;; Remove multiple attributes
+     (remove-attributes \"region*\" '(\"temp_attr\" \"old_attr\") :quiet t)"
+  
+  (let* ((name-list (ensure-list attribute-names))
+         (args (append '("rm") (list object-pattern) name-list)))
+    (apply #'mged:attr args)))
+
+(defun append-attributes (object-pattern attributes &key create-if-missing)
+  "Add attributes to objects matching the pattern (append-or-set behavior).
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+     ATTRIBUTES - Attribute specifications (alist, plist, or list of pairs)
+   
+   Keyword arguments:
+     :CREATE-IF-MISSING - If T, create objects if they don't exist (not implemented)
+   
+   Returns:
+     Result string from attr append command, or NIL on error
+   
+   Examples:
+     ;; Append attributes (creates if doesn't exist)
+     (append-attributes \"region1\" '((\"comment\" . \"Modified part\") (\"version\" . \"2\")))"
+  
+  (let* ((attr-pairs (normalize-attribute-pairs attributes))
+         (attr-args (build-attribute-args attr-pairs))
+         (args (append '("append") (list object-pattern) attr-args)))
+    (apply #'mged:attr args)))
+
+(defun list-attribute-types (object-pattern &key key-filter value-filter)
+  "List attribute types present on objects matching the pattern.
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+   
+   Keyword arguments:
+     :KEY-FILTER - Pattern to filter attribute names
+     :VALUE-FILTER - Pattern to filter attribute values (requires :KEY-FILTER)
+   
+   Returns:
+     - Without filters: List of attribute name strings
+     - With key filter only: List of matching attribute name strings  
+     - With both filters: List of \"key=value\" strings for matching pairs
+   
+   Examples:
+     ;; List all attribute types in database
+     (list-attribute-types \"*\")
+     ;; => (\"material_id\" \"region\" \"los\" \"color\" \"shader\")
+     
+     ;; List attributes matching pattern
+     (list-attribute-types \"*\" :key-filter \"material_*\")
+     ;; => (\"material_id\" \"material_name\")
+     
+     ;; List specific attribute values
+     (list-attribute-types \"*\" :key-filter \"material_id\" :value-filter \"*\")
+     ;; => (\"material_id=1\" \"material_id=2\" \"material_id=10\")"
+  
+  (let ((args (append '("list") (list object-pattern))))
+    (when key-filter
+      (push key-filter args)
+      (when value-filter
+        (push value-filter args)))
+    (let ((result (apply #'mged:attr (nreverse args))))
+      (when result
+        (split-string-by-whitespace result)))))
+
+(defun show-attributes (object-pattern &key attribute-names)
+  "Pretty-print attributes for objects matching the pattern.
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+   
+   Keyword arguments:
+     :ATTRIBUTE-NAMES - List of specific attribute names to show
+   
+   Returns:
+     Formatted string with pretty-printed attributes, or NIL on error
+   
+   Examples:
+     ;; Show all attributes for an object
+     (show-attributes \"region1\")
+     
+     ;; Show specific attributes
+     (show-attributes \"region*\" :attribute-names '(\"material_id\" \"color\"))"
+  
+  (let ((args (append '("show") (list object-pattern) attribute-names)))
+    (apply #'mged:attr args)))
+
+(defun sort-attributes (object-pattern &key sort-type)
+  "Display sorted attributes for objects matching the pattern.
+   
+   Arguments:
+     OBJECT-PATTERN - String pattern matching objects (supports wildcards)
+   
+   Keyword arguments:
+     :SORT-TYPE - Sort method: :CASE (default), :NOCASE, :VALUE, :VALUE-NOCASE
+   
+   Returns:
+     Formatted string with sorted attributes, or NIL on error
+   
+   Examples:
+     ;; Sort attributes alphabetically (case-sensitive)
+     (sort-attributes \"region1\")
+     
+     ;; Sort attributes alphabetically (case-insensitive)
+     (sort-attributes \"region*\" :sort-type :nocase)
+     
+     ;; Sort by attribute values
+     (sort-attributes \"region1\" :sort-type :value)"
+  
+  (let* ((sort-str (case sort-type
+                    (:case "case")
+                    (:nocase "nocase") 
+                    (:value "value")
+                    (:value-nocase "value-nocase")
+                    (t "case")))
+         (args (append '("sort") (list object-pattern) (list sort-str))))
+    (apply #'mged:attr args)))
+
+(defun copy-attribute (source-object source-attr target-object target-attr)
+  "Copy attribute value from source object to target object.
+   
+   Arguments:
+     SOURCE-OBJECT - String name of source object
+     SOURCE-ATTR - String name of source attribute
+     TARGET-OBJECT - String name of target object  
+     TARGET-ATTR - String name of target attribute
+   
+   Returns:
+     Result string from attr copy command, or NIL on error
+   
+   Examples:
+     ;; Copy attribute between objects
+     (copy-attribute \"region1\" \"material_id\" \"region2\" \"material_id\")
+     
+     ;; Copy attribute to new attribute name
+     (copy-attribute \"region1\" \"old_id\" \"region1\" \"new_id\")"
+  
+  (apply #'mged:attr "copy" source-object source-attr target-object target-attr))
 
 ;;;; ============================================================================
 ;;;; Raytracing Functions

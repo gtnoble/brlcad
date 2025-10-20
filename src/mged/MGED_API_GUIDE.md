@@ -595,6 +595,281 @@ The raytracing functions provide high-level wrappers around BRL-CAD's `rt` comma
 - `:use-air` - Enable air region rendering
 - `:additional-options` - List of extra rt flags
 
+## Attribute Management
+
+The MGED API provides comprehensive attribute management functions that offer structured, idiomatic Lisp interfaces to the `attr` command. Attributes are key-value pairs that can be attached to database objects for metadata, material properties, and other information.
+
+### Getting Attributes
+
+#### Basic Attribute Retrieval
+
+```lisp
+;; Get all attributes for a single object
+(get-attributes "region1")
+;; => (:MATERIAL-ID "10" :REGION "R" :LOS "100" :REGION-ID "1000")
+
+;; Get specific attributes
+(get-attributes "region1" :attribute-names '("material_id" "color"))
+;; => (:MATERIAL-ID "10" :COLOR "255/0/0")
+
+;; Get attributes from multiple objects
+(get-attributes "region*")
+;; => (("region1" (:MATERIAL-ID "10" :REGION "R"))
+;;     ("region2" (:MATERIAL-ID "20" :REGION "R")))
+```
+
+#### Working with Multiple Objects
+
+```lisp
+;; Process attributes from multiple objects
+(let ((objects-with-attrs (get-attributes "region*")))
+  (dolist (obj-info objects-with-attrs)
+    (let ((obj-name (car obj-info))
+          (attrs (cdr obj-info)))
+      (format t "~A: ~A~%" obj-name (getf attrs :material-id)))))
+
+;; Find objects with specific attribute values
+(let ((all-regions (get-attributes "region*")))
+  (remove-if-not (lambda (obj-info)
+                   (string= (getf (cdr obj-info) :region) "R"))
+                 all-regions))
+```
+
+### Setting Attributes
+
+#### Different Input Formats
+
+```lisp
+;; Using alist (association list)
+(set-attributes "region1" '(("material_id" . "10") ("color" . "255/0/0")))
+
+;; Using plist (property list)
+(set-attributes "region2" "material_id" "20" "color" "0/255/0")
+
+;; Using list of pairs
+(set-attributes "region3" '(("material_id" "30") ("color" "0/0/255")))
+
+;; Set attributes on multiple objects
+(set-attributes "region*" '(("region" . "R") ("los" . "100")))
+```
+
+#### Integration with Object Creation
+
+```lisp
+;; Create a region with attributes
+(make-region "part1" '("sphere" "cylinder") 
+             :id 1001 
+             :color #(200 100 50))
+
+;; Add additional attributes
+(set-attributes "part1" '(("part_number" . "A-123") 
+                          ("revision" . "v2")
+                          ("description" . "Main assembly part")))
+```
+
+### Removing Attributes
+
+```lisp
+;; Remove single attribute
+(remove-attributes "region1" "temp_attr")
+
+;; Remove multiple attributes
+(remove-attributes "region*" '("temp_attr" "old_attr") :quiet t)
+
+;; Clean up temporary attributes from multiple objects
+(let ((temp-attrs '("temp_flag" "debug_info" "test_attr")))
+  (remove-objects "temp_*" temp-attrs :quiet t))
+```
+
+### Appending Attributes
+
+```lisp
+;; Append attributes (creates if doesn't exist)
+(append-attributes "region1" '(("comment" . "Modified part") 
+                               ("version" . "2")))
+
+;; Add history tracking
+(append-attributes "assembly1" '(("modified_by" . "designer1")
+                                  ("modified_date" . "2023-10-20")))
+```
+
+### Listing Attribute Types
+
+```lisp
+;; List all attribute types in database
+(list-attribute-types "*")
+;; => ("material_id" "region" "los" "color" "shader" "region_id")
+
+;; List attributes matching pattern
+(list-attribute-types "*" :key-filter "material_*")
+;; => ("material_id" "material_name")
+
+;; List specific attribute values
+(list-attribute-types "*" :key-filter "material_id" :value-filter "*")
+;; => ("material_id=1" "material_id=2" "material_id=10")
+
+;; Get all unique values for an attribute
+(let ((material-values (list-attribute-types "*" :key-filter "material_id" :value-filter "*")))
+  (mapcar (lambda (item)
+            (subseq item (1+ (position #\= item))))
+          material-values))
+;; => ("1" "2" "10")
+```
+
+### Displaying and Sorting Attributes
+
+```lisp
+;; Pretty-print all attributes for an object
+(show-attributes "region1")
+
+;; Show specific attributes
+(show-attributes "region*" :attribute-names '("material_id" "color"))
+
+;; Sort attributes alphabetically (case-sensitive)
+(sort-attributes "region1")
+
+;; Sort attributes alphabetically (case-insensitive)
+(sort-attributes "region*" :sort-type :nocase)
+
+;; Sort by attribute values
+(sort-attributes "region1" :sort-type :value)
+```
+
+### Copying Attributes
+
+```lisp
+;; Copy attribute between objects
+(copy-attribute "region1" "material_id" "region2" "material_id")
+
+;; Copy attribute to new attribute name (rename)
+(copy-attribute "region1" "old_id" "region1" "new_id")
+
+;; Batch copy attributes between similar objects
+(defun copy-template-attributes (template target)
+  "Copy common template attributes to target object"
+  (dolist (attr '("material_id" "color" "shader"))
+    (when (get-attributes template :attribute-names (list attr))
+      (copy-attribute template attr target attr))))
+
+(copy-template-attributes "template_region" "new_region")
+```
+
+### Advanced Attribute Operations
+
+#### Attribute Validation
+
+```lisp
+(defun validate-region-attributes (region-name)
+  "Validate that a region has required attributes"
+  (let ((attrs (get-attributes region-name))
+        (required '(:region :region-id :material-id)))
+    (every (lambda (req-attr)
+              (getf attrs req-attr))
+            required)))
+
+(validate-region-attributes "region1")
+;; => T or NIL
+```
+
+#### Attribute Migration
+
+```lisp
+(defun migrate-attribute-names (object-pattern old->new-map)
+  "Rename attributes according to mapping"
+  (let ((objects (get-attributes object-pattern)))
+    (dolist (obj-info objects)
+      (let ((obj-name (car obj-info))
+            (attrs (cdr obj-info)))
+        (dolist (mapping old->new-map)
+          (let ((old-name (car mapping))
+                (new-name (cdr mapping)))
+            (when (getf attrs (intern (string-upcase old-name) :keyword))
+              (copy-attribute obj-name old-name obj-name new-name)
+              (remove-attributes obj-name old-name)))))))
+
+;; Rename attributes from old naming convention
+(migrate-attribute-names "region*" 
+                         '(("material_id" . "mat_id")
+                           ("region_id" . "reg_id")))
+```
+
+#### Attribute Templates
+
+```lisp
+(defun apply-attribute-template (object-pattern template)
+  "Apply a template of attributes to objects matching pattern"
+  (set-attributes object-pattern template))
+
+;; Define standard templates
+(defparameter *steel-region-template*
+  '(("material" . "steel")
+    ("density" . "7850")
+    ("surface_finish" . "machined")
+    ("corrosion_resistance" . "high")))
+
+(defparameter *aluminum-region-template*
+  '(("material" . "aluminum")
+    ("density" . "2700")
+    ("surface_finish" . "anodized")
+    ("corrosion_resistance" . "medium")))
+
+;; Apply templates
+(apply-attribute-template "steel_*" *steel-region-template*)
+(apply-attribute-template "alum_*" *aluminum-region-template*)
+```
+
+### Integration with Existing Functions
+
+#### Enhanced Object Information
+
+```lisp
+;; Get structured attribute information
+(get-object-info "region1" :attributes t)
+;; => (:MATERIAL-ID "10" :REGION "R" :LOS "100")
+
+;; Combine with regular object info
+(let ((basic-info (get-object-info "region1"))
+      (attrs (get-object-info "region1" :attributes t)))
+  (format t "Object: ~A~%" basic-info)
+  (format t "Material: ~A~%" (getf attrs :material-id)))
+```
+
+#### Enhanced Region Creation
+
+```lisp
+;; Create region with comprehensive attributes
+(make-region "complex_part" 
+             '("base" "hole1" "hole2")
+             :id 2001
+             :color #(192 192 192)
+             :attributes '(("part_number" . "CP-2001")
+                          ("revision" . "v3.2")
+                          ("material" . "titanium")
+                          ("weight_class" . "light")
+                          ("inspection_required" . "true")))
+```
+
+### Error Handling
+
+```lisp
+;; Safe attribute operations
+(handler-case
+    (get-attributes "nonexistent_object")
+  (mged-error (e)
+    (format t "Object not found: ~A~%" e)))
+
+;; Validate attribute operations
+(defun safe-set-attributes (object-pattern attributes)
+  "Set attributes with error handling"
+  (handler-case
+      (progn
+        (set-attributes object-pattern attributes)
+        t)
+    (mged-error (e)
+      (format t "Failed to set attributes on ~A: ~A~%" object-pattern e)
+      nil)))
+```
+
 ## Complete Examples
 
 ### Example 1: Simple Tank Turret
