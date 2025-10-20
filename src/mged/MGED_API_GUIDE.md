@@ -392,13 +392,77 @@ When using `:long-format t`, each object is returned as a plist with the followi
 
 ### Deleting Objects
 
-```lisp
-;; Delete a single object
-(mged-api:kill-object "ball")
+The MGED API provides three high-level functions for deleting objects with various options and safety features.
 
-;; Delete object and all references
-(mged-api:kill-tree "assembly1")
+#### Basic Object Deletion
+
+```lisp
+;; Delete specific objects
+(mged-api:kill-objects '("sphere1" "box2"))
+
+;; Delete a single object
+(mged-api:kill-objects "temp_obj")
+
+;; Delete with force flag (no complaints about missing objects)
+(mged-api:kill-objects "maybe_missing" :force t)
+
+;; Delete quietly (suppress lookup failure messages)
+(mged-api:kill-objects '("obj1" "obj2") :quiet t)
 ```
+
+#### Delete All Objects and References
+
+```lisp
+;; Delete specific objects and all references to them
+(mged-api:kill-all-objects '("sphere1" "box2"))
+
+;; Delete ALL objects in database (use with extreme caution!)
+(mged-api:kill-all-objects)
+
+;; Dry run to see what would be deleted
+(mged-api:kill-all-objects :dry-run t)
+;; => ("sphere1" "box2" "assembly1" "component1")
+
+;; Dry run for specific objects
+(mged-api:kill-all-objects '("temp1" "temp2") :dry-run t)
+;; => ("temp1" "temp2" "ref1" "ref2")
+```
+
+#### Recursive Tree Deletion
+
+```lisp
+;; Delete object tree recursively
+(mged-api:kill-object-tree "assembly1")
+
+;; Delete with all references (safer than :force)
+(mged-api:kill-object-tree '("group1" "group2") :all t)
+
+;; Force delete (may create dangling references)
+(mged-api:kill-object-tree "complex_assembly" :force t)
+
+;; Dry run to see what would be deleted
+(mged-api:kill-object-tree "assembly1" :dry-run t)
+;; => ("assembly1" "component1" "component2" "subpart1" "subpart2")
+```
+
+#### Safety Features
+
+**Dry Run Mode**: All three functions support `:dry-run t` to preview what would be deleted:
+
+```lisp
+;; Safe pattern: always dry run first
+(let ((to-delete (mged-api:kill-all-objects "temp*" :dry-run t)))
+  (when (and to-delete 
+             (y-or-n-p "Delete ~D objects? ~{~A ~}" (length to-delete) to-delete))
+    (mged-api:kill-all-objects "temp*")))
+```
+
+**Force vs Quiet Options**:
+- `:force t` - Don't complain if objects don't exist
+- `:quiet t` - Suppress database lookup failure messages
+- `:all t` - Kill objects and clean up all references (safer than `:force`)
+
+**Warning**: All delete operations are destructive and cannot be undone. Always consider using `:dry-run t` first to verify what will be deleted.
 
 ## Transformations
 

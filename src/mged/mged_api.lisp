@@ -19,7 +19,7 @@
        ;; Export all symbols used by mged-api
        #:ls #:draw #:erase #:Z #:exists #:attr #:get
        #:in #:c #:mater #:r #:g #:cp #:mv #:kill
-       #:killtree #:tra #:center #:rot #:sca #:rt))))
+       #:killall #:killtree #:tra #:center #:rot #:sca #:rt))))
 
 ;;; Define the high-level API package
 (defpackage :mged-api
@@ -55,8 +55,9 @@
    ;; Object Manipulation
    #:copy-object
    #:move-object
-   #:kill-object
-   #:kill-tree
+   #:kill-objects
+   #:kill-all-objects
+   #:kill-object-tree
    
    ;; Transformations
    #:translate-object
@@ -614,25 +615,173 @@
     Result string from 'mv' command"
   (mged:mv old-name new-name))
 
-(defun kill-object (name)
-  "Delete an object from the database.
-  
-  Arguments:
-    NAME - String name of object to delete
-  
-  Returns:
-    Result string from 'kill' command"
-  (mged:kill name))
+;;;; ============================================================================
+;;;; Object Deletion Operations
+;;;; ============================================================================
 
-(defun kill-tree (name)
-  "Delete an object and all references to it.
+(defun parse-kill-output (output)
+  "Parse kill command output to extract object names.
+   Used for dry-run mode (-n flag) to return structured data.
+   
+   Arguments:
+     OUTPUT - String output from kill/killall/killtree with -n flag
+   
+   Returns:
+     List of object name strings that would be killed"
+  (when output
+    (let ((lines (split-lines output)))
+      (remove-if #'(lambda (s) (zerop (length s)))
+                 (mapcar #'(lambda (line)
+                           (string-trim "(\"" (string-trim ")\"" line)))
+                         lines)))))
+
+(defun build-kill-flags (flags)
+  "Build argument list for kill command flags.
+   FLAGS is a plist like (:force t :quiet t)
+   Returns list of flag strings."
+  (let ((args '()))
+    (loop for (key value) on flags by #'cddr
+          do (case key
+               (:force 
+                (when value (push "-f" args)))
+               (:quiet 
+                (when value (push "-q" args)))
+               (:dry-run 
+                (when value (push "-n" args)))
+               (:all 
+                (when value (push "-a" args)))))
+    (nreverse args)))
+
+(defun kill-objects (names &key force quiet)
+  "Delete specified objects from the database.
+   
+   This is a high-level wrapper for the 'kill' command with Lisp-idiomatic
+   keyword arguments. Objects are deleted immediately - there is no undo.
+   
+   Arguments:
+     NAMES - String or list of strings specifying object names to delete
+   
+   Keyword arguments:
+     :FORCE - If T, don't complain if some objects don't exist (maps to -f flag)
+     :QUIET - If T, suppress database object lookup failure messages (maps to -q flag)
+   
+   Returns:
+     Result string from kill command, or NIL on error
+   
+   Example:
+     ;; Delete specific objects
+     (kill-objects '(\"sphere1\" \"box2\"))
+     
+     ;; Delete with force flag (no complaints about missing objects)
+     (kill-objects \"temp_obj\" :force t)
+     
+     ;; Delete quietly
+     (kill-objects '(\"obj1\" \"obj2\") :quiet t)
+   
+   Warning: This operation is destructive and cannot be undone. Use with caution."
   
-  Arguments:
-    NAME - String name of object to delete
+  (let* ((name-list (ensure-list names))
+         (flag-args (build-kill-flags (list :force force :quiet quiet))))
+    (apply #'mged:kill (append flag-args name-list))))
+
+(defun kill-all-objects (&optional names &key dry-run)
+  "Delete specified objects and remove all references to them from combinations.
+   If no objects are specified, deletes ALL objects in the database.
+   
+   This is a high-level wrapper for the 'killall' command with enhanced
+   functionality. When no names are provided, it operates on all objects.
+   
+   Arguments:
+     NAMES - Optional string or list of strings specifying object names.
+             If NIL or omitted, operates on ALL objects in database.
+   
+   Keyword arguments:
+     :DRY-RUN - If T, return list of objects that would be killed without
+                actually deleting them (maps to -n flag)
+   
+   Returns:
+     - Normal mode: Result string from killall command, or NIL on error
+     - Dry-run mode: List of object name strings that would be killed
+   
+   Example:
+     ;; Delete specific objects and all references
+     (kill-all-objects '(\"sphere1\" \"box2\"))
+     
+     ;; Delete ALL objects in database (use with extreme caution!)
+     (kill-all-objects)
+     
+     ;; Dry run to see what would be deleted
+     (kill-all-objects :dry-run t)
+     
+     ;; Dry run for specific objects
+     (kill-all-objects '(\"temp1\" \"temp2\") :dry-run t)
+   
+   Warning: This operation is destructive and cannot be undone. 
+            When no names are specified, it will delete ALL objects.
+            Consider using :DRY-RUN T first to verify what will be deleted."
   
-  Returns:
-    Result string from 'killtree' command"
-  (mged:killtree name))
+  (let* ((target-names (if names
+                           (ensure-list names)
+                           ;; If no names specified, get all objects
+                           (list-objects)))
+         (flag-args (build-kill-flags (list :dry-run dry-run))))
+    
+    (if dry-run
+        ;; Dry run mode - parse and return object list
+        (let ((result (apply #'mged:killall (append flag-args target-names))))
+          (parse-kill-output result))
+        ;; Normal mode - execute deletion
+        (apply #'mged:killall (append flag-args target-names)))))
+
+(defun kill-object-tree (names &key all force dry-run)
+  "Delete specified objects and recursively delete all objects they reference.
+   
+   This is a high-level wrapper for the 'killtree' command with Lisp-idiomatic
+   keyword arguments. For each combination among the specified objects, the
+   combination and all its members are deleted recursively.
+   
+   Arguments:
+     NAMES - String or list of strings specifying object names to delete
+   
+   Keyword arguments:
+     :ALL - If T, kill objects even if referenced elsewhere, then kill all
+            references (maps to -a flag, equivalent to killall on each member)
+     :FORCE - If T, kill objects even if referenced elsewhere (may create
+              dangling references, maps to -f flag)
+     :DRY-RUN - If T, return list of objects that would be killed without
+                actually deleting them (maps to -n flag)
+   
+   Returns:
+     - Normal mode: Result string from killtree command, or NIL on error
+     - Dry-run mode: List of object name strings that would be killed
+   
+   Example:
+     ;; Delete object tree recursively
+     (kill-object-tree \"assembly1\")
+     
+     ;; Delete with all references (safer than :force)
+     (kill-object-tree '(\"group1\" \"group2\") :all t)
+     
+     ;; Force delete (may create dangling references)
+     (kill-object-tree \"complex_assembly\" :force t)
+     
+     ;; Dry run to see what would be deleted
+     (kill-object-tree \"assembly1\" :dry-run t)
+   
+   Note: :ALL flag is generally safer than :FORCE as it cleans up references.
+   
+   Warning: This operation is destructive and cannot be undone. 
+            Consider using :DRY-RUN T first to verify what will be deleted."
+  
+  (let* ((name-list (ensure-list names))
+         (flag-args (build-kill-flags (list :all all :force force :dry-run dry-run))))
+    
+    (if dry-run
+        ;; Dry run mode - parse and return object list
+        (let ((result (apply #'mged:killtree (append flag-args name-list))))
+          (parse-kill-output result))
+        ;; Normal mode - execute deletion
+        (apply #'mged:killtree (append flag-args name-list)))))
 
 ;;;; ============================================================================
 ;;;; Transformation Functions
