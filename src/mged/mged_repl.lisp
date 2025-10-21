@@ -130,17 +130,33 @@ Disassemble current function.~%")))
     ;; This is critical - tpl-read looks for *tpl-commands* in dynamic scope
     (let ((si::*tpl-commands* *mged-tpl-commands*)
           (si::*tpl-level* 0))
-      (setq +++ ++ ++ + + -)
-      (setq - (si::tpl-read))  ; Now sees *tpl-commands* in dynamic scope!
-      
-      ;; Establish restart that can be selected from ECL's debugger
-      ;; When errors occur, users can choose this restart to return to top-level
+      ;; Establish comprehensive restart protection that covers both reading and evaluation
+      ;; This ensures users always have access to top-level restart even during reader errors
       (with-simple-restart 
-          (abort-to-toplevel "Return to MGED top-level REPL.")
-        (let ((values (multiple-value-list 
-                       (si::eval-with-env - si::*break-env*))))
-          (setq /// // // / / values *** ** ** * * (car /))
-          (format t "~&~{~S~^~%~}~%" values)))
+          (top-level-repl "Return to MGED top-level REPL")
+        (handler-case
+            (progn
+              (setq +++ ++ ++ + + -)
+              (setq - (si::tpl-read))  ; Reader errors are caught here
+              
+              ;; Additional restart protection for evaluation phase
+              (with-simple-restart 
+                  (abort-to-toplevel "Return to MGED top-level REPL.")
+                (let ((values (multiple-value-list 
+                               (si::eval-with-env - si::*break-env*))))
+                  (setq /// // // / / values *** ** ** * * (car /))
+                  (format t "~&~{~S~^~%~}~%" values))))
+          ;; Handle reader errors specifically and provide restart access
+          (simple-reader-error (condition)
+            (format t "~&Reader error: ~A~%" condition)
+            (format t "Use the 'Top level Repl' restart to return to the prompt.~%")
+            (invoke-restart 'top-level-repl))
+          ;; Handle other errors during evaluation
+          (error (condition)
+            (format t "~&Error: ~A~%" condition)
+            (format t "Use the 'Top level Repl' restart to return to the prompt.~%")
+            (invoke-restart 'top-level-repl))))
+      
       ;; Display prompt immediately after results, matching ECL's native behavior
       (si::tpl-prompt))
     t))

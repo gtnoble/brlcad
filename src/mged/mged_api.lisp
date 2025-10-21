@@ -6,83 +6,6 @@
 ;;;;
 ;;;; This file is compiled by ECL at build time and linked into the mged binary.
 
-(in-package :cl-user)
-
-;;; Ensure MGED package exists at compile-time
-;;; (The full package is defined in mged_commands.lisp and loaded at runtime)
-(eval-when (:compile-toplevel :load-toplevel :execute)
-  (unless (find-package :mged)
-    (defpackage :mged
-      (:use :cl)
-      (:shadow #:get)  ; Shadow CL's GET so we can export our own
-      (:export 
-       ;; Export all symbols used by mged-api
-       #:ls #:draw #:erase #:Z #:exists #:attr #:get
-       #:in #:c #:mater #:r #:g #:cp #:mv #:kill
-       #:killall #:killtree #:tra #:center #:rot #:sca #:rt))))
-
-;;; Define the high-level API package
-(defpackage :mged-api
-  (:use :cl)
-  (:documentation "High-level, idiomatic Lisp API for MGED commands.")
-  (:export 
-   ;; Listing & Queries
-   #:list-objects
-   #:object-exists-p
-   #:get-object-info
-   
-   ;; Display Operations
-   #:draw-objects
-   #:erase-objects
-   #:clear-display
-   
-   ;; Primitive Creation
-   #:make-sphere
-   #:make-ellipsoid
-   #:make-cylinder
-   #:make-cone
-   #:make-box
-   #:make-arb8
-   #:make-torus
-   #:make-particle
-   #:create-primitive
-   
-   ;; Combinations & Regions
-   #:make-combination
-   #:make-region
-   #:make-group
-   
-   ;; Object Manipulation
-   #:copy-object
-   #:move-object
-   #:kill-objects
-   #:kill-all-objects
-   #:kill-object-tree
-   
-   ;; Transformations
-   #:translate-object
-   #:rotate-object
-   #:scale-object
-   
-   ;; Raytracing
-   #:raytrace
-   #:quick-preview
-   #:high-quality-render
-   
-   ;; Attribute Management
-   #:get-attributes
-   #:set-attributes
-   #:remove-attributes
-   #:append-attributes
-   #:list-attribute-types
-   #:show-attributes
-   #:sort-attributes
-   #:copy-attribute
-   
-   ;; Utilities
-   #:vector->string
-   #:color->string))
-
 (in-package :mged-api)
 
 ;;;; ============================================================================
@@ -238,6 +161,232 @@
                (:attributes
                 (when value (push "-A" args)))))
     (nreverse args)))
+
+;;;; ============================================================================
+;;;; Database Management Functions
+;;;; ============================================================================
+
+(defun database-exists-p (filename)
+  "Check if a database file exists and is readable.
+   
+   Arguments:
+     FILENAME - String path to the database file
+   
+   Returns:
+     T if file exists and is readable, NIL otherwise"
+  (and (stringp filename)
+       (plusp (length filename))
+       (probe-file filename)
+       (file-readable-p filename)))
+
+(defun get-current-database ()
+  "Get the name of the currently open database.
+   
+   Returns:
+     String containing the current database filename, or NIL if no database is open"
+  (let ((result (mged:opendb)))
+    (when (and result (plusp (length result)))
+      result)))
+
+(defun create-database (filename &key overwrite)
+  "Create a new database file.
+   
+   Arguments:
+     FILENAME - String path for the new database file
+   
+   Keyword arguments:
+     :OVERWRITE - If T, overwrite existing database file (default: NIL)
+   
+   Returns:
+     T if database was created successfully, NIL on error
+   
+   Notes:
+     - If file already exists and :OVERWRITE is NIL, returns NIL
+     - Uses opendb with -c flag to force creation
+     - Automatically closes any existing database first"
+  
+  ;; Validate filename
+  (unless (and filename (plusp (length filename)))
+    (error "FILENAME must be a non-empty string"))
+  
+  ;; Check if file exists and overwrite is not specified
+  (when (and (database-exists-p filename) (not overwrite))
+    (return-from create-database nil))
+  
+  ;; Close current database if any
+  (when (get-current-database)
+    (close-database))
+  
+  ;; Create the new database
+  (handler-case
+      (progn
+        (apply #'mged:opendb `("-c" ,filename))
+        (when (get-current-database)
+          (format t "Database '~A' created successfully~%" filename))
+        t)
+    (mged-error ()
+      nil)))
+
+(defun open-database (filename &key create-mode)
+  "Open an existing database file.
+   
+   Arguments:
+     FILENAME - String path to the database file
+   
+   Keyword arguments:
+     :CREATE-IF-MISSING - If T, create database if it doesn't exist
+     :FORCE-CREATE - If T, force creation (equivalent to -c flag)
+     :NO-CREATE - If T, don't create database if it doesn't exist
+   
+   Returns:
+     T if database was opened successfully, NIL on error
+   
+   Notes:
+     - Only one of :CREATE-IF-MISSING, :FORCE-CREATE, :NO-CREATE should be specified
+     - :FORCE-CREATE takes precedence over other options
+     - :NO-CREATE takes precedence over :CREATE-IF-MISSING
+     - Automatically closes any existing database first"
+  
+  ;; Validate filename
+  (unless (and filename (plusp (length filename)))
+    (error "FILENAME must be a non-empty string"))
+  
+  ;; Validate create-mode parameter
+  (unless (member create-mode '(:create-if-missing :force-create :no-create :default nil))
+    (error "CREATE-MODE must be one of: :CREATE-IF-MISSING, :FORCE-CREATE, :NO-CREATE, :DEFAULT, or NIL"))
+  
+  ;; Set default mode if NIL
+  (let ((actual-create-mode (or create-mode :default)))
+    ;; Check if file exists
+    (let ((file-exists (database-exists-p filename)))
+      (cond
+        ;; File doesn't exist - check creation options
+        ((not file-exists)
+         (case actual-create-mode
+           (:force-create
+            ;; Force create
+            (create-database filename))
+           (:no-create
+            ;; Don't create
+            (format t "Database '~A' does not exist and creation is disabled~%" filename)
+            nil)
+           ((:create-if-missing :default)
+            ;; Create if missing (default behavior)
+            (create-database filename))
+           (t
+            ;; Should not reach here due to validation above
+            (error "Invalid create-mode: ~A" actual-create-mode))))
+        
+        ;; File exists - open it
+        (t
+         (close-database)
+         (handler-case
+             (progn
+               (mged:opendb filename)
+               (when (get-current-database)
+                 (format t "Database '~A' opened successfully~%" filename))
+               t)
+           (mged-error ()
+             nil)))))))
+
+(defun close-database ()
+  "Close the currently open database.
+   
+   Returns:
+     T if database was closed successfully, NIL if no database was open or on error"
+  
+  (when (get-current-database)
+    (handler-case
+        (progn
+          (mged:closedb)
+          t)
+      (mged-error ()
+        nil))))
+
+(defun ensure-database (filename &key create-if-missing force-create)
+  "Ensure a database is available, opening existing or creating new as needed.
+   
+   Arguments:
+     FILENAME - String path to the database file
+   
+   Keyword arguments:
+     :CREATE-IF-MISSING - If T, create database if it doesn't exist (default: T)
+     :FORCE-CREATE - If T, force creation of new database
+   
+   Returns:
+     T if database is available (opened or created), NIL on error
+   
+   Notes:
+     - This is a convenience function that handles both existing and new databases
+     - Default behavior is to create if missing
+     - :FORCE-CREATE creates a new database even if one exists"
+  
+  (let ((file-exists (database-exists-p filename)))
+    (cond
+      (force-create
+       ;; Force create new database
+       (create-database filename))
+      (file-exists
+       ;; Open existing database
+       (open-database filename))
+      (create-if-missing
+       ;; Create if missing (default behavior)
+       (create-database filename))
+      (t
+       ;; Don't create, just try to open
+       (open-database filename :no-create t)))))
+
+(defmacro with-database (filename create-mode &rest body)
+  "Execute BODY with the specified database temporarily open.
+   
+   Arguments:
+     FILENAME - String path to the database file
+     CREATE-MODE - Symbol specifying creation behavior:
+                    :CREATE-IF-MISSING - Create if file doesn't exist
+                    :FORCE-CREATE - Force creation of new file
+                    :NO-CREATE - Don't create, only open existing
+                    :DEFAULT - Use default behavior (create if missing)
+   
+   Body:
+     Forms to execute with the database open
+   
+   Returns:
+     Value of the last form in BODY
+   
+   Notes:
+     - Saves current database state before opening new one
+     - Restores original database state after BODY completes
+     - Uses unwind-protect to ensure cleanup even if BODY errors
+     - If no database was open originally, closes database after BODY"
+  
+  (let ((original-db (gensym "ORIGINAL-DB"))
+        (success-var (gensym "SUCCESS"))
+        (result-var (gensym "RESULT")))
+    `(let ((,original-db (get-current-database))
+           (,success-var nil)
+           (,result-var nil))
+       (unwind-protect
+           (progn
+             ;; Open the specified database with the new create-mode parameter
+             (when (open-database ,filename 
+                                  :create-mode ,create-mode)
+               (setf ,success-var t)
+               ;; Execute the body
+               (setf ,result-var (progn ,@body))))
+         
+         ;; Cleanup: restore original database state
+         (when ,success-var
+           (let ((current-db (get-current-database)))
+             ;; Close current database
+             (when current-db
+               (close-database))
+             
+             ;; Restore original database if there was one
+             (when ,original-db
+               (open-database ,original-db)))))
+       
+       ;; Return the result
+       ,result-var)))
 
 ;;;; ============================================================================
 ;;;; Listing & Query Functions

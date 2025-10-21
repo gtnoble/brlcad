@@ -68,12 +68,10 @@ extern cl_object ecl_call_tcl_func(cl_object cmd_name, cl_object args_list);
 /* Forward declaration for mged_cmdtab from setup.c */
 extern struct cmdtab mged_cmdtab[];
 
-/* Forward declarations for ECL-generated init functions from compiled Lisp files */
-extern void init_mged_repl(cl_object);
-extern void init_mged_init(cl_object);
-extern void init_mged_commands(cl_object);
+/* Forward declaration for ECL-generated init function from compiled Lisp library.
+ * The build_with_ecl.lisp script creates a static library with a single wrapper
+ * initialization function that internally calls all individual module inits. */
 extern void init_mged_api(cl_object);
-extern void init_mged_math(cl_object);
 
 
 /**
@@ -297,13 +295,13 @@ ecl_register_commands(struct mged_state *s)
 	return;
     }
 
-    /* Register the C FFI functions in CL-USER package */
+    /* Register the C FFI functions in MGED package */
     ecl_def_c_function(
-	ecl_read_from_cstring("CL-USER::CALL-GED-EXEC"),
+	ecl_read_from_cstring("MGED::CALL-GED-EXEC"),
 	(cl_objectfn_fixed)ecl_call_ged_exec,
 	2);  /* 2 arguments: cmd_name, args_list */
     ecl_def_c_function(
-	ecl_read_from_cstring("CL-USER::CALL-TCL-FUNC"),
+	ecl_read_from_cstring("MGED::CALL-TCL-FUNC"),
 	(cl_objectfn_fixed)ecl_call_tcl_func,
 	2);  /* 2 arguments: cmd_name, args_list */
 
@@ -313,7 +311,7 @@ ecl_register_commands(struct mged_state *s)
     /* Call Lisp function to set up MGED environment and register all commands */
     ECL_CATCH_ALL_BEGIN(ecl_process_env()) {
 	result = cl_funcall(2,
-	    ecl_read_from_cstring("CL-USER::SETUP-MGED-ECL"),
+	    ecl_read_from_cstring("MGED::SETUP-MGED-ECL"),
 	    state_ptr);
 	count = ecl_to_int(result);
 	bu_log("Registered %d ECL commands in MGED package\n", count);
@@ -350,7 +348,21 @@ start_ecl_repl(struct mged_state *s)
     cl_eval(ecl_read_from_cstring("(si::set-limit 'c-stack 33554432)"));
     cl_eval(ecl_read_from_cstring("(si::set-limit 'lisp-stack 33554432)"));
 
-    /* Register C helper functions that Lisp will use */
+    /* Load compiled Lisp modules FIRST - they define the MGED package and functions like SETUP-MGED-ECL.
+     * The Lisp files are compiled at build time into a static library (libmged_api.a).
+     * The library provides a single wrapper initialization function (init_mged_api)
+     * that internally initializes all individual modules (mged_init, mged_commands,
+     * mged_repl, mged_api, mged_math). This registers all Lisp code with ECL and creates the MGED package. */
+    ecl_init_module(NULL, init_mged_api);
+
+    /* Restore terminal to normal mode for ECL REPL */
+    /* MGED disables echo with clr_Echo() for its own command-line editing,
+     * but ECL's REPL expects the terminal to echo characters normally */
+#ifndef HAVE_WINDOWS_H
+    reset_Tty(fileno(stdin));  /* Restore line mode and echo */
+#endif
+
+    /* Register C helper functions that Lisp will use - AFTER loading Lisp library so MGED package exists */
     
     /* Register the quit wrapper as a callable ECL function */
     ecl_def_c_function(
@@ -368,37 +380,20 @@ start_ecl_repl(struct mged_state *s)
     
     /* Register cmdtab helper functions for Lisp */
     ecl_def_c_function(
-	ecl_read_from_cstring("CMDTAB-COUNT"),
+	ecl_read_from_cstring("MGED::CMDTAB-COUNT"),
 	(cl_objectfn_fixed)ecl_cmdtab_count,
 	0  /* 0 arguments */
     );
     ecl_def_c_function(
-	ecl_read_from_cstring("CMDTAB-GET-NAME"),
+	ecl_read_from_cstring("MGED::CMDTAB-GET-NAME"),
 	(cl_objectfn_fixed)ecl_cmdtab_get_name,
 	1  /* 1 argument: index */
     );
     ecl_def_c_function(
-	ecl_read_from_cstring("CMDTAB-IS-CUSTOM"),
+	ecl_read_from_cstring("MGED::CMDTAB-IS-CUSTOM"),
 	(cl_objectfn_fixed)ecl_cmdtab_is_custom,
 	1  /* 1 argument: index */
     );
-
-    /* Restore terminal to normal mode for ECL REPL */
-    /* MGED disables echo with clr_Echo() for its own command-line editing,
-     * but ECL's REPL expects the terminal to echo characters normally */
-#ifndef HAVE_WINDOWS_H
-    reset_Tty(fileno(stdin));  /* Restore line mode and echo */
-#endif
-
-    /* Load compiled Lisp modules FIRST - they define functions like SETUP-MGED-ECL.
-     * These files are compiled at build time and linked into the binary.
-     * We must call the C-level init functions that ECL generated during compilation.
-     * This registers all Lisp code (functions, variables, conditions, etc.) with ECL. */
-    ecl_init_module(NULL, init_mged_init);
-    ecl_init_module(NULL, init_mged_commands);
-    ecl_init_module(NULL, init_mged_repl);
-    ecl_init_module(NULL, init_mged_api);
-    ecl_init_module(NULL, init_mged_math);
 
     /* Now register all MGED commands as ECL functions (calls SETUP-MGED-ECL in Lisp) */
     ecl_register_commands(s);

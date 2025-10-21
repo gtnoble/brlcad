@@ -38,6 +38,18 @@
   (declare (ignore status))
   (mged-quit))
 
+;;; Global top-level restart handler
+;;; This function can be called from anywhere to return to the MGED REPL
+(defun return-to-mged-top-level ()
+  "Global function to return to MGED top-level REPL from any error condition."
+  (when (find-restart 'top-level-repl)
+    (invoke-restart 'top-level-repl))
+  (when (find-restart 'abort-to-toplevel)
+    (invoke-restart 'abort-to-toplevel))
+  ;; If no restarts found, try to recover gracefully
+  (format t "~&Returning to MGED top-level...~%")
+  (si::tpl-prompt))
+
 ;;; Initialize the ECL environment for MGED
 (defun init-mged-environment ()
   "Initialize ECL environment - called from C after ECL boot.
@@ -51,6 +63,19 @@ Sets up I/O streams, REPL state, and other ECL configuration."
         si::*ihs-top* (si::ihs-top)
         si::*ihs-current* (si::ihs-top)
         si::*break-env* nil)
+  
+  ;; Set up global error handler for reader errors that might occur outside REPL
+  (setf *debugger-hook* 
+        (lambda (condition hook)
+          (declare (ignore hook))
+          (when (typep condition 'simple-reader-error)
+            (format t "~&Reader error detected: ~A~%" condition)
+            (format t "Available restarts:~%")
+            (when (find-restart 'top-level-repl)
+              (format t "  0: Return to MGED top-level REPL~%"))
+            (when (find-restart 'abort-to-toplevel)
+              (format t "  1: Return to MGED top-level REPL~%"))
+            (format t "Choose restart or type (return-to-mged-top-level) to recover.~%"))))
   
   ;; Return success
   t)

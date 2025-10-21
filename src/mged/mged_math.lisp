@@ -8,22 +8,6 @@
 
 (in-package :cl-user)
 
-;;; Define the math package
-(defpackage :mged-math
-  (:use :cl)
-  (:documentation "Mathematical operations for MGED, focusing on 3D vector arithmetic.")
-  (:export 
-   ;; Core vector operations
-   #:v+ #:v- #:v* #:v/
-   #:vector-add #:vector-subtract #:vector-scale #:vector-divide
-   #:magnitude #:normalize #:dot #:cross
-   
-   ;; Vector constructors
-   #:vec #:make-vector
-   
-   ;; Basic utilities
-   #:vector-p #:distance #:angle))
-
 (in-package :mged-math)
 
 ;;;; ============================================================================
