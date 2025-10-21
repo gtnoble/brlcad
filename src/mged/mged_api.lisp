@@ -692,7 +692,7 @@
     NAME - String name for the combination
     MEMBERS - List of member specifications. Each member is either:
               - A string (object name, assumes union operation)
-              - A list (object-name operation), where operation is :union, :subtract, or :intersect
+              - A pair (object-name . operation), where operation is :union, :subtract, or :intersect
   
   Keyword arguments:
     :COLOR - Vector #(r g b) or list (r g b) specifying combination color
@@ -706,8 +706,8 @@
                    (etypecase member
                      (string (format nil "u ~A" member))
                      (list 
-                      (let ((obj (first member))
-                            (op (second member)))
+                      (let ((obj (car member))
+                            (op (cdr member)))
                         (format nil "~A ~A"
                                 (case op
                                   (:union "u")
@@ -752,8 +752,8 @@
                    (etypecase member
                      (string (format nil "u ~A" member))
                      (list 
-                      (let ((obj (first member))
-                            (op (second member)))
+                      (let ((obj (car member))
+                            (op (cdr member)))
                         (format nil "~A ~A"
                                 (case op
                                   (:union "u")
@@ -864,14 +864,15 @@
                 (when value (push "-a" args)))))
     (nreverse args)))
 
-(defun kill-objects (names &key force quiet)
+(defun kill-objects (&optional names &key force quiet)
   "Delete specified objects from the database.
    
    This is a high-level wrapper for the 'kill' command with Lisp-idiomatic
    keyword arguments. Objects are deleted immediately - there is no undo.
    
    Arguments:
-     NAMES - String or list of strings specifying object names to delete
+     NAMES - Optional string or list of strings specifying object names to delete.
+             If NIL or omitted, deletes ALL objects in the database.
    
    Keyword arguments:
      :FORCE - If T, don't complain if some objects don't exist (maps to -f flag)
@@ -881,6 +882,9 @@
      Result string from kill command, or NIL on error
    
    Example:
+     ;; Delete all objects in database
+     (kill-objects)
+     
      ;; Delete specific objects
      (kill-objects '(\"sphere1\" \"box2\"))
      
@@ -892,20 +896,22 @@
    
    Warning: This operation is destructive and cannot be undone. Use with caution."
   
-  (let* ((name-list (ensure-list names))
+  (let* ((target-names (if names
+                           (ensure-list names)
+                           ;; If no names specified, get all objects
+                           (list-objects)))
          (flag-args (build-kill-flags (list :force force :quiet quiet))))
-    (apply #'mged:kill (append flag-args name-list))))
+    (apply #'mged:kill (append flag-args target-names))))
 
-(defun kill-all-objects (&optional names &key dry-run)
+(defun kill-objects-and-references (names &key dry-run)
   "Delete specified objects and remove all references to them from combinations.
-   If no objects are specified, deletes ALL objects in the database.
    
    This is a high-level wrapper for the 'killall' command with enhanced
-   functionality. When no names are provided, it operates on all objects.
+   functionality. It removes objects and cleans up all references to them
+   from combinations in the database.
    
    Arguments:
-     NAMES - Optional string or list of strings specifying object names.
-             If NIL or omitted, operates on ALL objects in database.
+     NAMES - Required string or list of strings specifying object names to delete.
    
    Keyword arguments:
      :DRY-RUN - If T, return list of objects that would be killed without
@@ -917,33 +923,26 @@
    
    Example:
      ;; Delete specific objects and all references
-     (kill-all-objects '(\"sphere1\" \"box2\"))
-     
-     ;; Delete ALL objects in database (use with extreme caution!)
-     (kill-all-objects)
+     (kill-objects-and-references '(\"sphere1\" \"box2\"))
      
      ;; Dry run to see what would be deleted
-     (kill-all-objects :dry-run t)
+     (kill-objects-and-references \"sphere1\" :dry-run t)
      
      ;; Dry run for specific objects
-     (kill-all-objects '(\"temp1\" \"temp2\") :dry-run t)
+     (kill-objects-and-references '(\"temp1\" \"temp2\") :dry-run t)
    
    Warning: This operation is destructive and cannot be undone. 
-            When no names are specified, it will delete ALL objects.
             Consider using :DRY-RUN T first to verify what will be deleted."
   
-  (let* ((target-names (if names
-                           (ensure-list names)
-                           ;; If no names specified, get all objects
-                           (list-objects)))
+  (let* ((name-list (ensure-list names))
          (flag-args (build-kill-flags (list :dry-run dry-run))))
     
     (if dry-run
         ;; Dry run mode - parse and return object list
-        (let ((result (apply #'mged:killall (append flag-args target-names))))
+        (let ((result (apply #'mged:killall (append flag-args name-list))))
           (parse-kill-output result))
         ;; Normal mode - execute deletion
-        (apply #'mged:killall (append flag-args target-names)))))
+        (apply #'mged:killall (append flag-args name-list)))))
 
 (defun kill-object-tree (names &key all force dry-run)
   "Delete specified objects and recursively delete all objects they reference.
