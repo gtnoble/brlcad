@@ -134,28 +134,13 @@ Disassemble current function.~%")))
       ;; This ensures users always have access to top-level restart even during reader errors
       (with-simple-restart 
           (top-level-repl "Return to MGED top-level REPL")
-        (handler-case
             (progn
               (setq +++ ++ ++ + + -)
               (setq - (si::tpl-read))  ; Reader errors are caught here
-              
-              ;; Additional restart protection for evaluation phase
-              (with-simple-restart 
-                  (abort-to-toplevel "Return to MGED top-level REPL.")
-                (let ((values (multiple-value-list 
+                  (let ((values (multiple-value-list 
                                (si::eval-with-env - si::*break-env*))))
-                  (setq /// // // / / values *** ** ** * * (car /))
-                  (format t "~&~{~S~^~%~}~%" values))))
-          ;; Handle reader errors specifically and provide restart access
-          (simple-reader-error (condition)
-            (format t "~&Reader error: ~A~%" condition)
-            (format t "Use the 'Top level Repl' restart to return to the prompt.~%")
-            (invoke-restart 'top-level-repl))
-          ;; Handle other errors during evaluation
-          (error (condition)
-            (format t "~&Error: ~A~%" condition)
-            (format t "Use the 'Top level Repl' restart to return to the prompt.~%")
-            (invoke-restart 'top-level-repl))))
+                        (setq /// // // / / values *** ** ** * * (car /))
+                        (format t "~&~{~S~^~%~}~%" values))))
       
       ;; Display prompt immediately after results, matching ECL's native behavior
       (si::tpl-prompt))

@@ -64,18 +64,5 @@ Sets up I/O streams, REPL state, and other ECL configuration."
         si::*ihs-current* (si::ihs-top)
         si::*break-env* nil)
   
-  ;; Set up global error handler for reader errors that might occur outside REPL
-  (setf *debugger-hook* 
-        (lambda (condition hook)
-          (declare (ignore hook))
-          (when (typep condition 'simple-reader-error)
-            (format t "~&Reader error detected: ~A~%" condition)
-            (format t "Available restarts:~%")
-            (when (find-restart 'top-level-repl)
-              (format t "  0: Return to MGED top-level REPL~%"))
-            (when (find-restart 'abort-to-toplevel)
-              (format t "  1: Return to MGED top-level REPL~%"))
-            (format t "Choose restart or type (return-to-mged-top-level) to recover.~%"))))
-  
   ;; Return success
   t)
