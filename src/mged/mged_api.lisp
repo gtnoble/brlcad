@@ -154,6 +154,46 @@
         ;; Regular format: split by whitespace to get names
         (split-string-by-whitespace string))))
 
+(defun validate-alist-attributes (attributes &optional context)
+  "Validate that ATTRIBUTES is a proper alist of (string . string) pairs.
+   
+   Arguments:
+     ATTRIBUTES - The attributes list to validate
+     CONTEXT - Optional string describing the context for error messages
+   
+   Returns:
+     T if valid
+   
+   Signals:
+     ERROR if validation fails with descriptive message"
+  
+  (when attributes
+    ;; Check that it's a list
+    (unless (listp attributes)
+      (error "~AATTRIBUTES must be a list, got: ~A" 
+             (if context (format nil "~A: " context) "")
+             (type-of attributes)))
+    
+    ;; Check each element is a proper cons pair with strings
+    (loop for item in attributes
+          for position from 1
+          do (unless (consp item)
+               (error "~AAttribute at position ~D must be a cons pair, got: ~A"
+                      (if context (format nil "~A: " context) "")
+                      position
+                      (type-of item)))
+             (unless (stringp (car item))
+               (error "~AAttribute name must be a string, got: ~A at position ~D"
+                      (if context (format nil "~A: " context) "")
+                      (type-of (car item))
+                      position))
+             (unless (stringp (cdr item))
+               (error "~AAttribute value must be a string, got: ~A at position ~D"
+                      (if context (format nil "~A: " context) "")
+                      (type-of (cdr item))
+                      position))))
+  t)
+
 (defun build-flag-args (flags)
   "Build argument list from flag specifications.
    FLAGS is a plist like (:color #(255 0 0) :shaded t :no-resize t)
@@ -539,7 +579,7 @@
     (when shader
       (mged:mater name shader "" "" ""))))
 
-(defun make-region (name members &key id color shader material)
+(defun make-region (name members &key id color shader material attributes)
   "Create a region from members.
   
   Arguments:
@@ -547,6 +587,9 @@
     MEMBERS - List of member specifications (same format as make-combination)
   
   Keyword arguments:
+    :ATTRIBUTES - Alist of (attribute-name . value) pairs, e.g.,
+                  '((\"material_id\" . \"10\") (\"custom_prop\" . \"value\"))
+                  Only alist format is supported.
     :ID - Integer region ID
     :COLOR - Vector #(r g b) or list (r g b) specifying region color
     :SHADER - String specifying shader name
@@ -573,6 +616,14 @@
     
     ;; Create the region
     (apply #'mged:r name member-strings)
+    
+    ;; Set arbitrary attributes if provided (alist format only)
+    (when attributes
+      (validate-alist-attributes attributes "make-region")
+      (apply #'mged:attr "set" name 
+             (mapcan (lambda (pair) 
+                       (list (car pair) (cdr pair))) 
+                   attributes)))
     
     ;; Set region ID if provided
     (when id
@@ -855,7 +906,7 @@
 ;;;; Attribute Management Utility Functions
 ;;;; ============================================================================
 
-(defun parse-attribute-output (output &key single-object-p)
+(defun parse-attribute-output (output)
   "Parse attribute command output into structured data.
    
    Arguments:
@@ -864,32 +915,23 @@
                       If NIL, parse for multiple objects (returns list of plists)
    
    Returns:
-     - Single object: plist of attribute-name -> value pairs
-     - Multiple objects: list of (object-name . attribute-plist) pairs"
+     List of (object-name . attribute-plist) pairs"
   (when output
     (let ((lines (split-lines output)))
       (remove-if #'null
                  (mapcar (lambda (line)
                            (when (and line (plusp (length line)))
                              (let ((trimmed (string-trim " " line)))
-                               (if single-object-p
-                                   ;; Parse single object: attr_name value
-                                   (let ((pos (position #\Space trimmed)))
-                                     (when pos
-                                       (let ((attr-name (subseq trimmed 0 pos))
-                                             (attr-value (subseq trimmed (1+ pos))))
-                                         (list (intern (string-upcase attr-name) :keyword) 
-                                               attr-value))))
-                                   ;; Parse multiple objects: object_name attr_name value
-                                   (let* ((parts (split-string-by-whitespace trimmed))
-                                          (object-name (first parts))
-                                          (attr-name (second parts))
-                                          (attr-value (third parts)))
-                                     (when (and object-name attr-name attr-value)
-                                       (cons object-name
-                                             (list (intern (string-upcase attr-name) :keyword)
-                                                   attr-value)))))))
-                         lines))))))
+                               ;; Parse multiple objects: object_name attr_name value
+                               (let* ((parts (split-string-by-whitespace trimmed))
+                                      (object-name (first parts))
+                                      (attr-name (second parts))
+                                      (attr-value (third parts)))
+                                 (when (and object-name attr-name attr-value)
+                                   (cons object-name
+                                         (list (intern (string-upcase attr-name) :keyword)
+                                               attr-value)))))))
+                         lines)))))
 
 (defun normalize-attribute-pairs (attributes)
   "Normalize attribute specifications to a list of (name . value) pairs.
@@ -973,7 +1015,7 @@
                         '("*")))
          (args (append '("get") (list object-pattern) attr-names))
          (result (apply #'mged:attr args))
-         (parsed (parse-attribute-output result :single-object-p nil)))
+         (parsed (parse-attribute-output result)))
     
     ;; Group attributes by object
     (if (null parsed)
@@ -998,12 +1040,14 @@
                           (cons obj-name (gethash obj-name object-groups)))
                         objects)))))))
 
-(defun set-attributes (object-pattern attributes &key create-if-missing)
+(defun set-attributes (object-pattern attributes)
   "Set attribute values on objects matching the pattern.
    
    Arguments:
      OBJECT-PATTERN - String pattern matching objects (supports wildcards)
-     ATTRIBUTES - Attribute specifications (alist, plist, or list of pairs)
+     ATTRIBUTES - Alist of (attribute-name . value) pairs, e.g.,
+                  '(\"material_id\" . \"10\") (\"color\" . \"255/0/0\"))
+                  Only alist format is supported.
    
    Keyword arguments:
      :CREATE-IF-MISSING - If T, create objects if they don't exist (not implemented)
@@ -1015,18 +1059,17 @@
      ;; Set attributes using alist
      (set-attributes \"region1\" '((\"material_id\" . \"10\") (\"color\" . \"255/0/0\")))
      
-     ;; Set attributes using plist
-     (set-attributes \"region2\" \"material_id\" \"20\" \"color\" \"0/255/0\")
-     
      ;; Set attributes on multiple objects
      (set-attributes \"region*\" '((\"region\" . \"R\") (\"los\" . \"100\")))"
   
-  (let* ((attr-pairs (normalize-attribute-pairs attributes))
-         (attr-args (build-attribute-args attr-pairs))
+  ;; Validate attributes format (alist only)
+  (validate-alist-attributes attributes "set-attributes")
+  
+  (let* ((attr-args (build-attribute-args attributes))
          (args (append '("set") (list object-pattern) attr-args)))
     (apply #'mged:attr args)))
 
-(defun remove-attributes (object-pattern attribute-names &key quiet)
+(defun remove-attributes (object-pattern attribute-names)
   "Remove specified attributes from objects matching the pattern.
    
    Arguments:
@@ -1050,12 +1093,14 @@
          (args (append '("rm") (list object-pattern) name-list)))
     (apply #'mged:attr args)))
 
-(defun append-attributes (object-pattern attributes &key create-if-missing)
+(defun append-attributes (object-pattern attributes)
   "Add attributes to objects matching the pattern (append-or-set behavior).
    
    Arguments:
      OBJECT-PATTERN - String pattern matching objects (supports wildcards)
-     ATTRIBUTES - Attribute specifications (alist, plist, or list of pairs)
+     ATTRIBUTES - Alist of (attribute-name . value) pairs, e.g.,
+                  '(\"comment\" . \"Modified part\") (\"version\" . \"2\"))
+                  Only alist format is supported.
    
    Keyword arguments:
      :CREATE-IF-MISSING - If T, create objects if they don't exist (not implemented)
@@ -1067,8 +1112,10 @@
      ;; Append attributes (creates if doesn't exist)
      (append-attributes \"region1\" '((\"comment\" . \"Modified part\") (\"version\" . \"2\")))"
   
-  (let* ((attr-pairs (normalize-attribute-pairs attributes))
-         (attr-args (build-attribute-args attr-pairs))
+  ;; Validate attributes format (alist only)
+  (validate-alist-attributes attributes "append-attributes")
+  
+  (let* ((attr-args (build-attribute-args attributes))
          (args (append '("append") (list object-pattern) attr-args)))
     (apply #'mged:attr args)))
 

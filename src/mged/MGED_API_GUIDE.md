@@ -364,6 +364,17 @@ When using `:long-format t`, each object is returned as a plist with the followi
   :color #(192 192 192)
   :shader "plastic"
   :material "steel")
+
+;; Region with arbitrary attributes (alist format only)
+(mged-api:make-region "complex_part"
+  '(("base" :union)
+    ("hole" :subtract))
+  :id 3000
+  :color #(150 100 200)
+  :attributes '(("material_id" . "10")
+                ("part_number" . "A-123")
+                ("revision" . "v2")
+                ("custom_prop" . "value")))
 ```
 
 ### Creating Groups
@@ -606,7 +617,7 @@ The MGED API provides comprehensive attribute management functions that offer st
 ```lisp
 ;; Get all attributes for a single object
 (get-attributes "region1")
-;; => (:MATERIAL-ID "10" :REGION "R" :LOS "100" :REGION-ID "1000")
+;; => (:MATERIAL-ID "10" :REGION "R" :LOS "100")
 
 ;; Get specific attributes
 (get-attributes "region1" :attribute-names '("material_id" "color"))
@@ -637,21 +648,27 @@ The MGED API provides comprehensive attribute management functions that offer st
 
 ### Setting Attributes
 
-#### Different Input Formats
+#### Attribute Format (Alist Only)
+
+The MGED API now supports **only alist format** for attribute specifications. An alist (association list) is a list of cons pairs where each pair is `(attribute-name . value)`.
 
 ```lisp
-;; Using alist (association list)
+;; Correct: Using alist (association list)
 (set-attributes "region1" '(("material_id" . "10") ("color" . "255/0/0")))
-
-;; Using plist (property list)
-(set-attributes "region2" "material_id" "20" "color" "0/255/0")
-
-;; Using list of pairs
-(set-attributes "region3" '(("material_id" "30") ("color" "0/0/255")))
 
 ;; Set attributes on multiple objects
 (set-attributes "region*" '(("region" . "R") ("los" . "100")))
+
+;; Complex attribute sets
+(set-attributes "complex_part" 
+               '(("part_number" . "A-123")
+                 ("revision" . "v2.1")
+                 ("material" . "titanium")
+                 ("weight_class" . "light")
+                 ("inspection_required" . "true")))
 ```
+
+**Note**: Previous support for plist and list-of-pairs formats has been removed for API consistency. All attribute functions now require alist format.
 
 #### Integration with Object Creation
 
@@ -674,11 +691,11 @@ The MGED API provides comprehensive attribute management functions that offer st
 (remove-attributes "region1" "temp_attr")
 
 ;; Remove multiple attributes
-(remove-attributes "region*" '("temp_attr" "old_attr") :quiet t)
+(remove-attributes "region*" '("temp_attr" "old_attr"))
 
 ;; Clean up temporary attributes from multiple objects
 (let ((temp-attrs '("temp_flag" "debug_info" "test_attr")))
-  (remove-objects "temp_*" temp-attrs :quiet t))
+  (remove-attributes "temp_*" temp-attrs))
 ```
 
 ### Appending Attributes
