@@ -318,71 +318,146 @@ When using `:long-format t`, each object is returned as a plist with the followi
 
 ## Combinations and Regions
 
+The MGED API now provides intuitive boolean expression syntax that eliminates confusion about operation precedence. Instead of understanding BRL-CAD's complex order of operations, you write standard Lisp expressions with clear parentheses.
+
+### Boolean Expression Syntax
+
+**Operators** (symbols):
+- `union` - Boolean union (equivalent to `u` operator)
+- `subtract` - Boolean subtraction (equivalent to `-` operator)  
+- `intersect` - Boolean intersection (equivalent to `+` operator)
+
+**Operands**: Strings containing object names
+
 ### Creating Combinations
 
 ```lisp
-;; Simple combination (union)
-(mged-api:make-combination "assembly1"
-  '("ball" "cyl1" "box1"))
+;; Simple union
+(mged-api:make-combination "assembly1" 
+  '(union "ball" "cyl1" "box1"))
 
-;; Combination with operations
-(mged-api:make-combination "part1"
-  '(("ball" :union)
-    ("cyl1" :subtract)
-    ("box1" :intersect)))
+;; Nested expressions with clear precedence
+(mged-api:make-combination "machined_part" 
+  '(union "base_piece" 
+          (subtract "raw_piece" "cutter")
+          (intersect "hole1" "hole2")))
 
-;; Combination with color
-(mged-api:make-combination "assembly2"
-  '("ball" "cyl1")
-  :color #(128 128 255))
+;; Complex nested expression
+(mged-api:make-combination "complex_assembly"
+  '(union "sphere1" 
+          (subtract "sphere2" 
+                   (intersect "sphere3" "sphere4"))
+          "sphere5"))
 
-;; Combination with shader
-(mged-api:make-combination "shiny"
-  '("ball")
+;; Multi-operand union
+(mged-api:make-combination "many_parts"
+  '(union "part1" "part2" "part3" "part4" "part5"))
+
+;; With color and shader
+(mged-api:make-combination "colored_assembly"
+  '(union "base" (subtract "body" "hole"))
+  :color #(128 128 255)
   :shader "plastic")
 ```
 
 ### Creating Regions
 
 ```lisp
-;; Simple region
+;; Simple region with subtraction
 (mged-api:make-region "region1"
-  '(("ball" :union)
-    ("cyl1" :subtract)))
+  '(union "sphere1" (subtract "sphere2" "cube1"))
+  :id 100)
 
-;; Region with ID and color
-(mged-api:make-region "region2"
-  '("box1" "tor1")
-  :id 1000
-  :color #(200 100 50))
-
-;; Region with shader and material
-(mged-api:make-region "metal_part"
-  '(("base" :union)
-    ("hole" :subtract))
-  :id 2000
+;; Complex region with multiple operations
+(mged-api:make-region "steel_part"
+  '(union "base" (subtract "raw" "cutter"))
+  :id 200
   :color #(192 192 192)
-  :shader "plastic"
   :material "steel")
 
-;; Region with arbitrary attributes (alist format only)
-(mged-api:make-region "complex_part"
-  '(("base" :union)
-    ("hole" :subtract))
-  :id 3000
+;; Region with nested intersections
+(mged-api:make-region "precision_part"
+  '(union "main_body" 
+          (subtract "blank" 
+                   (intersect "drill_hole1" "drill_hole2")))
+  :id 300
   :color #(150 100 200)
-  :attributes '(("material_id" . "10")
-                ("part_number" . "A-123")
+  :attributes '(("part_number" . "A-123")
                 ("revision" . "v2")
-                ("custom_prop" . "value")))
+                ("surface_finish" . "polished")))
+
+;; Multi-operand region
+(mged-api:make-region "assembly_region"
+  '(union "component1" "component2" "component3")
+  :id 400
+  :color #(100 200 100))
 ```
 
 ### Creating Groups
 
+Groups are simplified unions for the most common case:
+
 ```lisp
-;; Group (union of all members)
+;; Simple group (union of all members)
 (mged-api:make-group "wheel_assembly"
   '("hub" "rim" "tire" "spokes"))
+
+;; Group with color
+(mged-api:make-group "red_parts"
+  '("sphere1" "cylinder1" "box1")
+  :color #(255 0 0))
+
+;; Group with shader
+(mged-api:make-group "shiny_parts"
+  '("ball" "torus")
+  :shader "mirror")
+```
+
+### Expression Examples
+
+The power of the new syntax is clear with complex expressions:
+
+```lisp
+;; Before (confusing precedence):
+;; (make-combination "old" '((a . :union) (b . :subtract) (c . :intersect)))
+;; Results in: a u b - c  (unclear precedence)
+
+;; After (clear intent):
+(mged-api:make-combination "new" 
+  '(union "a" (subtract "b" (intersect "c"))))
+;; Results in: (a u (b - (c + d)))  (clear parenthesized expression)
+
+;; Real-world complex example
+(mged-api:make-combination "engine_block"
+  '(union "block_base" 
+          (subtract "cylinder_banks" 
+                   (union "cylinder1_hole" "cylinder2_hole" "cylinder3_hole" "cylinder4_hole"))
+          (intersect "coolant_passage1" "coolant_passage2"))
+  :color #(128 128 128)
+  :material "aluminum")
+```
+
+### Expression Validation
+
+The API validates expressions and provides clear error messages:
+
+```lisp
+;; Valid expressions (no errors)
+(mged-api:make-combination "valid1" '(union "sphere1" "sphere2"))
+(mged-api:make-combination "valid2" '(union "a" (subtract "b" (intersect "c" "d"))))
+
+;; Invalid expressions (produce helpful errors)
+;; (make-combination "bad1" '("union" "sphere1" "sphere2"))
+;; Error: Boolean operators must be symbols, got: STRING
+
+;; (make-combination "bad2" '(xor "sphere1" "sphere2"))  
+;; Error: Unknown boolean operation: XOR. Use: union, subtract, or intersect
+
+;; (make-combination "bad3" '(union "sphere1"))
+;; Error: Operation UNION requires at least 2 operands, got: 1
+
+;; (make-combination "bad4" '(union "" "sphere2"))
+;; Error: Object names must be non-empty strings, got: ""
 ```
 
 ## Object Manipulation
@@ -901,9 +976,7 @@ The MGED API now supports **only alist format** for attribute specifications. An
 
 ;; Create the assembly
 (make-combination "tank_turret"
-  '(("base" :union)
-    ("turret" :union)
-    ("barrel" :union))
+  '(union "base" "turret" "barrel")
   :color #(100 100 100))
 
 ;; Draw it
@@ -954,13 +1027,8 @@ The MGED API now supports **only alist format** for attribute specifications. An
 
 ;; Create house region
 (make-region "house"
-  '(("floor" :union)
-    ("wall_north" :union)
-    ("wall_south" :union)
-    ("wall_east" :union)
-    ("wall_west" :union)
-    ("roof" :union)
-    ("door" :subtract))
+  '(union "floor" "wall_north" "wall_south" "wall_east" "wall_west" "roof"
+          (subtract "door"))
   :id 2001
   :color #(200 150 100))
 

@@ -1,4 +1,4 @@
-;;;; MGED High-Level API
+;;;; MGED High-Level API 🖥️
 ;;;;
 ;;;; This file provides idiomatic Lisp wrappers around the low-level MGED command
 ;;;; bindings. It offers keyword arguments, vector representations for points/directions,
@@ -682,124 +682,165 @@
   (create-primitive name "part" base height base-radius top-radius))
 
 ;;;; ============================================================================
+;;;; Boolean Expression Utilities
+;;;; ============================================================================
+
+(defun interleave-operator (operands operator)
+  "Interleave OPERATOR between each pair of OPERANDS.
+   OPERANDS is a flat list of processed operands.
+   OPERATOR is the operator string to insert."
+  (case (length operands)
+    (0 '())
+    (1 operands)
+    (t (cons (first operands)
+             (cons operator
+                   (interleave-operator (rest operands) operator))))))
+
+(defun expression->boolean-list (expression)
+  "Convert Lisp boolean expression to BRL-CAD format list.
+   Operators: symbols (union, subtract, intersect)
+   Operands: strings (object names)
+   
+   The BRL-CAD c command expects a list where each space in the expression
+   becomes a separate list element.
+   
+   Examples:
+     (expression->boolean-list '(union \"sphere1\" \"sphere2\"))
+     => '(\"(\" \"sphere1\" \"u\" \"sphere2\" \")\")
+     
+     (expression->boolean-list '(union \"sphere1\" (subtract \"sphere2\" (intersect \"sphere3\" \"sphere4\"))))
+     => '(\"(\" \"sphere1\" \"u\" \"(\" \"sphere2\" \"-\" \"(\" \"sphere3\" \"+\" \"sphere4\" \")\" \")\" \")\")
+   
+   This list can then be passed to mged:c as: (apply #'mged:c \"-c\" name boolean-list)"
+  (etypecase expression
+    (string 
+     ;; Leaf node - return as single-element list
+     (list expression))
+    (list 
+     ;; List with symbol operator and string operands
+     (let* ((op (first expression))
+           (operands (mapcan #'expression->boolean-list (rest expression)))
+           (op-str (case op (union "u") (subtract "-") (intersect "+"))))
+       (cons "(" 
+             (append (interleave-operator operands op-str)
+                     (list ")")))))))
+
+(defun validate-boolean-expression (expression)
+  "Validate expression: symbol operators, string operands only
+   
+   Validates that:
+   - Operators are symbols: union, subtract, intersect
+   - Operands are non-empty strings
+   - Each operation has at least 2 operands"
+  (labels ((validate (expr)
+             (etypecase expr
+               (string 
+                (unless (plusp (length expr))
+                  (error "Object names must be non-empty strings, got: \"~A\"" expr)))
+               (list
+                (unless (symbolp (first expr))
+                  (error "Boolean operators must be symbols, got: ~A" (type-of (first expr))))
+                (unless (member (first expr) '(union subtract intersect))
+                  (error "Unknown boolean operation: ~A. Use: union, subtract, or intersect" (first expr)))
+                (when (< (length expr) 3)
+                  (error "Operation ~A requires at least 2 operands, got: ~D" 
+                         (first expr) (1- (length expr))))
+                (mapc #'validate (rest expr))))))
+    (validate expression)))
+
+;;;; ============================================================================
 ;;;; Combinations & Regions
 ;;;; ============================================================================
 
-(defun make-combination (name members &key color shader)
-  "Create a combination from members.
+(defun make-combination (name expression &key color shader)
+  "Create a combination using intuitive boolean expression syntax.
+   
+   EXPRESSION: Lisp list with symbol operators and string operands
+   Operators: union, subtract, intersect
+   Operands: Strings containing object names
+   
+   Examples:
+     (make-combination 'simple' '(union \"sphere1\" \"sphere2\"))
+     (make-combination 'complex' '(union \"sphere1\" (subtract \"sphere2\" (intersect \"sphere3\" \"sphere4\"))))
+     (make-combination 'nested' '(union \"base\" (subtract \"part1\" (intersect \"hole1\" \"hole2\")) \"part2\"))
+   
+   Keyword arguments:
+     :COLOR - Vector #(r g b) or list (r g b) specifying combination color
+     :SHADER - String specifying shader name
+   
+   Returns:
+     Result string from 'c' command"
   
-  Arguments:
-    NAME - String name for the combination
-    MEMBERS - List of member specifications. Each member is either:
-              - A string (object name, assumes union operation)
-              - A pair (object-name . operation), where operation is :union, :subtract, or :intersect
-  
-  Keyword arguments:
-    :COLOR - Vector #(r g b) or list (r g b) specifying combination color
-    :SHADER - String specifying shader name
-  
-  Returns:
-    Result string from 'c' command"
-  
-  (let ((member-strings
-         (mapcar (lambda (member)
-                   (etypecase member
-                     (string (format nil "u ~A" member))
-                     (list 
-                      (let ((obj (car member))
-                            (op (cdr member)))
-                        (format nil "~A ~A"
-                                (case op
-                                  (:union "u")
-                                  (:subtract "-")
-                                  (:intersect "+")
-                                  (t "u"))
-                                obj)))))
-                 members)))
-    
-    ;; Create the combination
-    (apply #'mged:c name member-strings)
-    
-    ;; Set color if provided
-    (when color
-      (mged:mater name "" "" (color->string color) ""))
-    
-    ;; Set shader if provided
-    (when shader
-      (mged:mater name shader "" "" ""))))
+  (validate-boolean-expression expression)
+  (let* ((expr-list (expression->boolean-list expression))
+         (combination-return (apply #'mged:c "-c" name expr-list)))
+         (when color (mged:mater name "" "" (color->string color) ""))
+    (when shader (mged:mater name shader "" "" ""))
+    combination-return))
 
-(defun make-region (name members &key id color shader material attributes)
-  "Create a region from members.
+(defun make-region (name expression &key id color shader material attributes)
+  "Create a region using intuitive boolean expression syntax.
+   
+   Same expression format as make-combination, but creates a region with
+   region-specific attributes.
+   
+   Examples:
+     (make-region 'steel_part' '(union \"base\" (subtract \"raw\" \"cutter\")) 
+                   :id 100 :material \"steel\")
+     (make-region 'complex_region' 
+                   '(union \"sphere1\" (subtract \"block\" (intersect \"cylinder1\" \"cylinder2\")))
+                   :id 101 :color #(255 0 0) :attributes '((\"surface\" . \"polished\")))
+   
+   Keyword arguments:
+     :ID - Integer region ID
+     :COLOR - Vector #(r g b) or list (r g b) specifying region color
+     :SHADER - String specifying shader name
+     :MATERIAL - String specifying material name
+     :ATTRIBUTES - Alist of (attribute-name . value) pairs, e.g.,
+                   '((\"material_id\" . \"10\") (\"custom_prop\" . \"value\"))
+   
+   Returns:
+     Result string from 'c' command"
   
-  Arguments:
-    NAME - String name for the region
-    MEMBERS - List of member specifications (same format as make-combination)
-  
-  Keyword arguments:
-    :ATTRIBUTES - Alist of (attribute-name . value) pairs, e.g.,
-                  '((\"material_id\" . \"10\") (\"custom_prop\" . \"value\"))
-                  Only alist format is supported.
-    :ID - Integer region ID
-    :COLOR - Vector #(r g b) or list (r g b) specifying region color
-    :SHADER - String specifying shader name
-    :MATERIAL - String specifying material name
-  
-  Returns:
-    Result string from 'r' command"
-  
-  (let ((member-strings
-         (mapcar (lambda (member)
-                   (etypecase member
-                     (string (format nil "u ~A" member))
-                     (list 
-                      (let ((obj (car member))
-                            (op (cdr member)))
-                        (format nil "~A ~A"
-                                (case op
-                                  (:union "u")
-                                  (:subtract "-")
-                                  (:intersect "+")
-                                  (t "u"))
-                                obj)))))
-                 members)))
-    
-    ;; Create the region
-    (apply #'mged:r name member-strings)
-    
-    ;; Set arbitrary attributes if provided (alist format only)
-    (when attributes
+  (validate-boolean-expression expression)
+  (let* ((expr-list (expression->boolean-list expression))
+        (combination-return (apply #'mged:c "-r" name expr-list)))
+        ;; Set region-specific attributes
+        (when id (set-attributes name `(("region_id" . ,(princ-to-string id)))))
+        (when color (mged:mater name "" "" (color->string color) ""))
+        (when shader (mged:mater name shader "" "" ""))
+        (when material (mged:mater name "" material "" ""))
+    (when attributes 
       (validate-alist-attributes attributes "make-region")
       (apply #'mged:attr "set" name 
-             (mapcan (lambda (pair) 
-                       (list (car pair) (cdr pair))) 
-                   attributes)))
-    
-    ;; Set region ID if provided
-    (when id
-      (set-attributes name `(("region_id" . ,(princ-to-string id)))))
-    
-    ;; Set color if provided
-    (when color
-      (mged:mater name "" "" (color->string color) ""))
-    
-    ;; Set shader if provided
-    (when shader
-      (mged:mater name shader "" "" ""))
-    
-    ;; Set material if provided
-    (when material
-      (mged:mater name "" material "" ""))))
+             (mapcan (lambda (pair) (list (car pair) (cdr pair))) attributes)))
+    combination-return))
 
-(defun make-group (name members)
-  "Create a group (combination with union operation on all members).
+(defun make-group (name members &key color shader)
+  "Create a group (union combination) from a list of object names.
+   
+   This is a convenience function for creating simple union combinations.
+   Equivalent to: (make-combination name (cons 'union members))
+   
+   MEMBERS: List of strings containing object names
+   
+   Examples:
+     (make-group 'assembly' '(\"sphere1\" \"sphere2\" \"cube1\"))
+     (make-group 'parts' (list-objects :pattern \"part*\") :color #(0 255 0))
+   
+   Keyword arguments:
+     :COLOR - Vector #(r g b) or list (r g b) specifying group color
+     :SHADER - String specifying shader name
+   
+   Returns:
+     Result from make-combination"
   
-  Arguments:
-    NAME - String name for the group
-    MEMBERS - List of strings specifying member object names
+  (unless (and members (every #'stringp members))
+    (error "MEMBERS must be a non-empty list of strings, got: ~A" members))
   
-  Returns:
-    Result string from 'g' command"
-  (apply #'mged:g name members))
+  ;; Convert to union expression and delegate to make-combination
+  (make-combination name (cons 'union members)
+                    :color color :shader shader))
 
 ;;;; ============================================================================
 ;;;; Object Manipulation
