@@ -53,6 +53,22 @@
                       (push (subseq string start) result)))
       (nreverse result))))
 
+(defun strip-type-decorators (object-name)
+  "Remove BRL-CAD type decorators from object names.
+   Removes trailing '/', 'R', and '/R' suffixes.
+   Returns: clean object name."
+  (when object-name
+    (let ((len (length object-name)))
+      (cond
+        ;; Remove '/R' suffix
+        ((and (>= len 2) (string= (subseq object-name (- len 2)) "/R"))
+         (subseq object-name 0 (- len 2)))
+        ;; Remove '/' suffix  
+        ((and (>= len 1) (char= (char object-name (- len 1)) #\/))
+         (subseq object-name 0 (- len 1)))
+        ;; No decorators, return as-is
+        (t object-name)))))
+
 (defun parse-ls-line (line)
   "Parse a long-format ls line into a plist.
    Long format: name type major-type minor-type length
@@ -75,7 +91,7 @@
         (let ((lines (split-lines string)))
           (remove nil (mapcar #'parse-ls-line lines)))
         ;; Regular format: split by whitespace to get names
-        (split-string-by-whitespace string))))
+        (mapcar #'strip-type-decorators (split-string-by-whitespace string)))))
 
 (defun validate-alist-attributes (attributes &optional context)
   "Validate that ATTRIBUTES is a proper alist of (string . string) pairs.
@@ -841,6 +857,64 @@
   ;; Convert to union expression and delegate to make-combination
   (make-combination name (cons 'union members)
                     :color color :shader shader))
+
+(defun make-lathe (name shape-function start-point length-vector step-length)
+  "Create a lathe object by revolving a shape function along an axis.
+   
+   This function creates a lathe shape by generating a series of cone sections
+   that approximate the profile defined by SHAPE-FUNCTION. The shape function
+   takes an offset distance and returns the radius at that offset.
+   
+   Arguments:
+     NAME - String name for the lathe group
+     SHAPE-FUNCTION - Function that takes an offset (number) and returns a radius
+     START-POINT - Vector #(x y z) specifying the starting point of the lathe axis
+     LENGTH-VECTOR - Vector #(dx dy dz) specifying the direction and length of the lathe
+     STEP-LENGTH - Number specifying the distance between cone sections
+   
+   Returns:
+     Result from make-group command containing all cone sections
+   
+   Example:
+     ;; Create a simple cylinder lathe
+     (make-lathe 'cylinder
+                 (lambda (offset) 5.0)  ; Constant radius of 5
+                 #(0 0 0)               ; Start at origin
+                 #(0 0 10)              ; 10 units along Z axis
+                 1.0)                   ; 1 unit steps
+   
+   Notes:
+     - Creates multiple cone primitives and combines them into a group
+     - The shape function should return non-negative radius values
+     - Smaller step-length creates smoother but more complex geometry"
+  
+  (let ((direction (mged-math::normalize length-vector))
+        (overall-length (mged-math::magnitude length-vector))
+        (created-section-names '())) 
+    (flet ((increment-offset (current-offset) 
+             (let ((expected-next-offset (+ current-offset step-length)))
+               (if (>= expected-next-offset overall-length) 
+                   overall-length 
+                   expected-next-offset)))) 
+      (do* ((section-count 0 (+ section-count 1))
+             (current-offset 0 (setq current-offset next-offset))
+             (next-offset  (increment-offset current-offset) (increment-offset current-offset))
+             (section-length (- next-offset current-offset)))
+        ((>= next-offset overall-length) (mged-api::make-group name created-section-names))
+        (let* ( 
+               (start-radius (abs (funcall shape-function current-offset)))
+               (end-radius (abs (funcall shape-function next-offset)))
+               (section-length-vector (mged-math::v* direction section-length))
+               (current-start-point (mged-math::v+ start-point 
+                                                  (mged-math::v* direction current-offset)))
+               (section-name (format nil "section-~A-~A" section-count name)))
+          (setq created-section-names 
+                (cons (mged-api::make-cone section-name
+                                           current-start-point 
+                                           section-length-vector 
+                                           start-radius 
+                                           end-radius) 
+                      created-section-names)))))))
 
 ;;;; ============================================================================
 ;;;; Object Manipulation
