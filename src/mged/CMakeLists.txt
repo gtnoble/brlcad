@@ -34,6 +34,9 @@ set(
   mater.c
   menu.c
   mged.c
+  mged_server.c
+  mged_client.c
+  mged_protocol.c
   mover.c
   overlay.c
   plot.c

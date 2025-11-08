@@ -82,6 +82,7 @@
 #include "./mged_dm.h"
 #include "./cmd.h"
 #include "./f_cmd.h" // for f_opendb
+#include "mged_server.h"
 #include "brlcad_ident.h"
 
 #ifndef COMMAND_LINE_EDITING
@@ -1878,7 +1879,7 @@ main(int argc, char *argv[])
 #endif
 
     bu_optind = 1;
-    while ((c = bu_getopt(argc, argv, "a:d:hbcCorx:X:v?")) != -1) {
+    while ((c = bu_getopt(argc, argv, "a:d:hbcCorx:X:v?s:")) != -1) {
 	if (bu_optopt == '?') c='h';
 	switch (c) {
 	    case 'a':
@@ -1924,11 +1925,52 @@ main(int argc, char *argv[])
 		bu_log("WARNING: -o is a developer option and subject to change.  Do not use.\n");
 		old_mged_gui = 0;
 		break;
+	    case 's':
+		/* Socket server mode - run as server only */
+		{
+		    const char *socket_path = bu_optarg;
+		    struct mged_server server;
+		    
+		    bu_log("Starting MGED socket server on %s\n", socket_path);
+		    
+		    if (mged_server_init(&server, socket_path) < 0) {
+			bu_exit(EXIT_FAILURE, "Failed to initialize server\n");
+		    }
+		    
+		    if (mged_server_start(&server) < 0) {
+			mged_server_cleanup(&server);
+			bu_exit(EXIT_FAILURE, "Failed to start server\n");
+		    }
+		    
+		    /* Server mode main loop */
+		    while (server.running) {
+			/* Check for server events (short timeout to stay responsive) */
+			int ret = mged_server_poll(&server, 10);
+			if (ret < 0) {
+			    /* Handle poll error */
+			    bu_log("Server poll error, shutting down\n");
+			    break;
+			}
+			
+			/* Handle mged events if needed */
+			if (s->gedp) {
+			    /* Process any existing mged events */
+			    Tcl_DoOneEvent(TCL_ALL_EVENTS|TCL_DONT_WAIT);
+			}
+			
+			/* Call refresh to handle display updates and timing */
+			refresh(s);
+		    }
+		    
+		    mged_server_cleanup(&server);
+		    bu_exit(EXIT_SUCCESS, "Server shutdown\n");
+		}
+		break;
 	    default:
 		bu_log("Unrecognized option (%c)\n", bu_optopt);
 		/* fall through */
 	    case 'h':
-		bu_exit(1, "Usage:  %s [-a attach] [-b] [-c|-C] [-f] [-d display] [-h|?] [-r] [-x#] [-X#] [-v] [database [command]]\n", argv[0]);
+		bu_exit(1, "Usage:  %s [-a attach] [-b] [-c|-C] [-f] [-d display] [-h|?] [-r] [-s socket_path] [-x#] [-X#] [-v] [database [command]]\n", argv[0]);
 	}
     }
 
