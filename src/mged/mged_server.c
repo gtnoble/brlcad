@@ -83,6 +83,22 @@ int mged_server_start(struct mged_server *server) {
         return -1;
     }
     
+    // Validate that server is properly initialized
+    if (server->server_fd < 0) {
+        bu_log("ERROR: Server not properly initialized - invalid server_fd\n");
+        return -1;
+    }
+    
+    if (strlen(server->socket_path) == 0) {
+        bu_log("ERROR: Server not properly initialized - empty socket path\n");
+        return -1;
+    }
+    
+    if (!server->poll_fds || !server->client_sessions) {
+        bu_log("ERROR: Server not properly initialized - NULL poll arrays\n");
+        return -1;
+    }
+    
     bu_log("MGED server listening on %s\n", server->socket_path);
     return 0;
 }

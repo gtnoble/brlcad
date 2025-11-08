@@ -1,0 +1,58 @@
+# Values set at CMake configure time 
+set(CBDIR "@CMAKE_CURRENT_BINARY_DIR@")
+set(CSDIR "@CMAKE_CURRENT_SOURCE_DIR@")
+set(LOGFILE "${CBDIR}/regress-ged_mged_server_protocol.log")
+
+file(WRITE "${LOGFILE}" "Starting mged_server_protocol test run\n")
+
+# The executable locations aren't know at CMake configure time, so it is passed
+# in via the EXEC variable at runtime by a generator expression in the parent
+# build.  De-quote it and assign it to the appropriate variable.
+string(REPLACE "\\" "" PROTOCOL_EXEC "${EXEC}")
+if(NOT EXISTS "${PROTOCOL_EXEC}")
+  file(WRITE "${LOGFILE}" "mged_server_protocol test program not found at location \"${PROTOCOL_EXEC}\" - aborting\n")
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "Unable to find mged_server_protocol test program, aborting.\nSee ${LOGFILE} for more details.\n${LOG}")
+endif(NOT EXISTS "${PROTOCOL_EXEC}")
+
+# Run protocol parsing tests
+file(APPEND "${LOGFILE}" "Running ${PROTOCOL_EXEC} all\n")
+execute_process(
+  COMMAND "${PROTOCOL_EXEC}" "all"
+  RESULT_VARIABLE protocol_result
+  OUTPUT_VARIABLE protocol_log
+  ERROR_VARIABLE protocol_log
+  WORKING_DIRECTORY ${CBDIR}
+)
+file(APPEND "${LOGFILE}" "${protocol_log}")
+if(protocol_result)
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "[regress-ged_mged_server_protocol] Failure: ${protocol_result}. See ${LOGFILE} for more info.\n${LOG}")
+endif(protocol_result)
+
+# Run individual tests for detailed output
+set(TEST_NAMES basic single multiple special empty malformed response)
+foreach(test_name ${TEST_NAMES})
+  file(APPEND "${LOGFILE}" "Running ${PROTOCOL_EXEC} ${test_name}\n")
+  execute_process(
+    COMMAND "${PROTOCOL_EXEC}" "${test_name}"
+    RESULT_VARIABLE protocol_result
+    OUTPUT_VARIABLE protocol_log
+    ERROR_VARIABLE protocol_log
+    WORKING_DIRECTORY ${CBDIR}
+  )
+  file(APPEND "${LOGFILE}" "${protocol_log}")
+  if(protocol_result)
+    file(READ "${LOGFILE}" LOG)
+    message(FATAL_ERROR "[regress-ged_mged_server_protocol] Failure in ${test_name}: ${protocol_result}. See ${LOGFILE} for more info.\n${LOG}")
+  endif(protocol_result)
+endforeach(test_name)
+
+file(APPEND "${LOGFILE}" "All mged_server_protocol tests completed successfully\n")
+
+# Local Variables:
+# tab-width: 8
+# mode: cmake
+# indent-tabs-mode: t
+# End:
+# ex: shiftwidth=2 tabstop=8

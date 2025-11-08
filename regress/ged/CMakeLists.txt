@@ -10,6 +10,22 @@ if(TARGET libged)
   brlcad_regression_test(regress-ged_push "regress_push;ged-npush" EXEC regress_push)
   distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_push.log")
   distclean("${CMAKE_CURRENT_BINARY_DIR}/ged_push.g")
+
+  # MGED Socket Server Tests
+  brlcad_addexec(regress_mged_server_protocol "mged_server_protocol.c;${CMAKE_SOURCE_DIR}/src/mged/mged_protocol.c" libged TEST_USESDATA)
+  target_include_directories(regress_mged_server_protocol PRIVATE ${CMAKE_SOURCE_DIR}/src/mged)
+  brlcad_regression_test(regress-ged_mged_server_protocol "regress_mged_server_protocol" EXEC regress_mged_server_protocol)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_mged_server_protocol.log")
+
+  brlcad_addexec(regress_mged_server_core "mged_server_core.c;${CMAKE_SOURCE_DIR}/src/mged/mged_server.c;${CMAKE_SOURCE_DIR}/src/mged/mged_client.c;${CMAKE_SOURCE_DIR}/src/mged/mged_protocol.c" libged TEST_USESDATA)
+  target_include_directories(regress_mged_server_core PRIVATE ${CMAKE_SOURCE_DIR}/src/mged)
+  brlcad_regression_test(regress-ged_mged_server_core "regress_mged_server_core" EXEC regress_mged_server_core)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_mged_server_core.log")
+
+  brlcad_addexec(regress_mged_client_tests "mged_client_tests.c;${CMAKE_SOURCE_DIR}/src/mged/mged_client.c;${CMAKE_SOURCE_DIR}/src/mged/mged_protocol.c" libged TEST_USESDATA)
+  target_include_directories(regress_mged_client_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/mged)
+  brlcad_regression_test(regress-ged_mged_client_tests "regress_mged_client_tests" EXEC regress_mged_client_tests)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_mged_client_tests.log")
 endif(TARGET libged)
 
 cmakefiles(
@@ -21,6 +37,9 @@ cmakefiles(
   regress-ged_mater.cmake.in
   regress-ged_push.cmake.in
   xpush_tests.g
+  mged_server_protocol.c
+  mged_server_core.c
+  mged_client_tests.c
 )
 
 # Local Variables:

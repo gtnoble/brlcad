@@ -1,0 +1,58 @@
+# Values set at CMake configure time 
+set(CBDIR "@CMAKE_CURRENT_BINARY_DIR@")
+set(CSDIR "@CMAKE_CURRENT_SOURCE_DIR@")
+set(LOGFILE "${CBDIR}/regress-ged_mged_client_tests.log")
+
+file(WRITE "${LOGFILE}" "Starting mged_client_tests test run\n")
+
+# The executable locations aren't know at CMake configure time, so it is passed
+# in via the EXEC variable at runtime by a generator expression in the parent
+# build.  De-quote it and assign it to an appropriate variable.
+string(REPLACE "\\" "" CLIENT_EXEC "${EXEC}")
+if(NOT EXISTS "${CLIENT_EXEC}")
+  file(WRITE "${LOGFILE}" "mged_client_tests test program not found at location \"${CLIENT_EXEC}\" - aborting\n")
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "Unable to find mged_client_tests test program, aborting.\nSee ${LOGFILE} for more details.\n${LOG}")
+endif(NOT EXISTS "${CLIENT_EXEC}")
+
+# Run client management tests
+file(APPEND "${LOGFILE}" "Running ${CLIENT_EXEC} all\n")
+execute_process(
+  COMMAND "${CLIENT_EXEC}" "all"
+  RESULT_VARIABLE client_result
+  OUTPUT_VARIABLE client_log
+  ERROR_VARIABLE client_log
+  WORKING_DIRECTORY ${CBDIR}
+)
+file(APPEND "${LOGFILE}" "${client_log}")
+if(client_result)
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "[regress-ged_mged_client_tests] Failure: ${client_result}. See ${LOGFILE} for more info.\n${LOG}")
+endif(client_result)
+
+# Run individual tests for detailed output
+set(TEST_NAMES creation buffer state multiple error)
+foreach(test_name ${TEST_NAMES})
+  file(APPEND "${LOGFILE}" "Running ${CLIENT_EXEC} ${test_name}\n")
+  execute_process(
+    COMMAND "${CLIENT_EXEC}" "${test_name}"
+    RESULT_VARIABLE client_result
+    OUTPUT_VARIABLE client_log
+    ERROR_VARIABLE client_log
+    WORKING_DIRECTORY ${CBDIR}
+  )
+  file(APPEND "${LOGFILE}" "${client_log}")
+  if(client_result)
+    file(READ "${LOGFILE}" LOG)
+    message(FATAL_ERROR "[regress-ged_mged_client_tests] Failure in ${test_name}: ${client_result}. See ${LOGFILE} for more info.\n${LOG}")
+  endif(client_result)
+endforeach(test_name)
+
+file(APPEND "${LOGFILE}" "All mged_client_tests tests completed successfully\n")
+
+# Local Variables:
+# tab-width: 8
+# mode: cmake
+# indent-tabs-mode: t
+# End:
+# ex: shiftwidth=2 tabstop=8
