@@ -304,6 +304,175 @@ cleanup:
     return result;
 }
 
+int test_partial_message_handling() {
+    struct bu_vls buffer;
+    int result = 0;
+    
+    bu_log("Testing partial message handling...\n");
+    
+    bu_vls_init(&buffer);
+    
+    // Test parsing with incomplete command (no FS)
+    const char *partial_cmd = "ls";
+    struct command_request *req = parse_protocol_request(partial_cmd, strlen(partial_cmd));
+    if (!req) {
+        bu_log("ERROR: Failed to parse partial command\n");
+        result = -1;
+        goto cleanup;
+    }
+    
+    if (strcmp(req->command, "ls") != 0) {
+        bu_log("ERROR: Expected command 'ls', got '%s'\n", req->command);
+        result = -1;
+    }
+    
+    if (req->argc != 0) {
+        bu_log("ERROR: Expected 0 arguments, got %d\n", req->argc);
+        result = -1;
+    }
+    
+    free_command_request(req);
+    
+    // Test parsing with partial argument (no terminating FS)
+    const char *partial_arg = "pwd\x1D/path";
+    req = parse_protocol_request(partial_arg, strlen(partial_arg));
+    if (!req) {
+        bu_log("ERROR: Failed to parse command with partial argument\n");
+        result = -1;
+        goto cleanup;
+    }
+    
+    if (strcmp(req->command, "pwd") != 0) {
+        bu_log("ERROR: Expected command 'pwd', got '%s'\n", req->command);
+        result = -1;
+    }
+    
+    if (req->argc != 1) {
+        bu_log("ERROR: Expected 1 argument, got %d\n", req->argc);
+        result = -1;
+    } else {
+        if (strcmp(req->argv[0], "/path") != 0) {
+            bu_log("ERROR: Expected argument '/path', got '%s'\n", req->argv[0]);
+            result = -1;
+        }
+    }
+    
+    free_command_request(req);
+    
+cleanup:
+    bu_vls_free(&buffer);
+    
+    if (result == 0) {
+        bu_log("PASS: Partial message handling\n");
+    } else {
+        bu_log("FAIL: Partial message handling\n");
+    }
+    
+    return result;
+}
+
+int test_multiple_messages_in_buffer() {
+    int result = 0;
+    
+    bu_log("Testing multiple messages in single buffer...\n");
+    
+    // This test is designed to verify that parse_protocol_request correctly
+    // isolates a single command when multiple commands are in the buffer
+    
+    // Test with a buffer containing exactly one command with FS terminator
+    const char *single_cmd = "ls\x1C";
+    struct command_request *req = parse_protocol_request(single_cmd, strlen(single_cmd));
+    if (!req) {
+        bu_log("ERROR: Failed to parse single command\n");
+        result = -1;
+        goto cleanup;
+    }
+    
+    if (strcmp(req->command, "ls") != 0) {
+        bu_log("ERROR: Expected command 'ls', got '%s'\n", req->command);
+        result = -1;
+    }
+    
+    if (req->argc != 0) {
+        bu_log("ERROR: Expected 0 arguments, got %d\n", req->argc);
+        result = -1;
+    }
+    
+    free_command_request(req);
+    
+    // Test parsing a command with arguments and FS terminator
+    const char *cmd_with_args = "pwd\x1D/path\x1C";
+    req = parse_protocol_request(cmd_with_args, strlen(cmd_with_args));
+    if (!req) {
+        bu_log("ERROR: Failed to parse command with args\n");
+        result = -1;
+        goto cleanup;
+    }
+    
+    if (strcmp(req->command, "pwd") != 0) {
+        bu_log("ERROR: Expected command 'pwd', got '%s'\n", req->command);
+        result = -1;
+    }
+    
+    free_command_request(req);
+    
+cleanup:
+    if (result == 0) {
+        bu_log("PASS: Multiple messages in buffer\n");
+    } else {
+        bu_log("FAIL: Multiple messages in buffer\n");
+    }
+    
+    return result;
+}
+
+int test_error_propagation() {
+    struct bu_vls response;
+    int result = 0;
+    
+    bu_log("Testing error propagation in protocol...\n");
+    
+    bu_vls_init(&response);
+    
+    // Test error response with message
+    if (format_protocol_response(&response, "ERR", NULL, "Invalid command syntax") != 0) {
+        bu_log("ERROR: Failed to format error response\n");
+        result = -1;
+        goto cleanup;
+    }
+    
+    const char *expected_err = "ERR\x1D\x1DInvalid command syntax\x1C";
+    if (strcmp(bu_vls_addr(&response), expected_err) != 0) {
+        bu_log("ERROR: Expected error response '%s', got '%s'\n", expected_err, bu_vls_addr(&response));
+        result = -1;
+    }
+    
+    // Test error response with both result and error
+    bu_vls_trunc(&response, 0);
+    if (format_protocol_response(&response, "ERR", "Partial result", "In complete execution") != 0) {
+        bu_log("ERROR: Failed to format error response with result\n");
+        result = -1;
+        goto cleanup;
+    }
+    
+    const char *expected_err_both = "ERR\x1DPartial result\x1DIn complete execution\x1C";
+    if (strcmp(bu_vls_addr(&response), expected_err_both) != 0) {
+        bu_log("ERROR: Expected error response '%s', got '%s'\n", expected_err_both, bu_vls_addr(&response));
+        result = -1;
+    }
+    
+cleanup:
+    bu_vls_free(&response);
+    
+    if (result == 0) {
+        bu_log("PASS: Error propagation in protocol\n");
+    } else {
+        bu_log("FAIL: Error propagation in protocol\n");
+    }
+    
+    return result;
+}
+
 int main(int ac, char *av[]) {
     int test_count = 0;
     int passed_count = 0;
@@ -321,6 +490,9 @@ int main(int ac, char *av[]) {
         printf("  empty        - Empty command handling\n");
         printf("  malformed    - Malformed protocol handling\n");
         printf("  response     - Response formatting\n");
+        printf("  partial      - Partial message handling\n");
+        printf("  multiple     - Multiple messages in buffer\n");
+        printf("  errorprop    - Error propagation in protocol\n");
         printf("  all          - Run all tests\n");
         return 1;
     }
@@ -358,6 +530,21 @@ int main(int ac, char *av[]) {
     if (BU_STR_EQUAL(av[1], "response") || BU_STR_EQUAL(av[1], "all")) {
         test_count++;
         if (test_response_formatting() == 0) passed_count++;
+    }
+    
+    if (BU_STR_EQUAL(av[1], "partial") || BU_STR_EQUAL(av[1], "all")) {
+        test_count++;
+        if (test_partial_message_handling() == 0) passed_count++;
+    }
+    
+    if (BU_STR_EQUAL(av[1], "multiple") || BU_STR_EQUAL(av[1], "all")) {
+        test_count++;
+        if (test_multiple_messages_in_buffer() == 0) passed_count++;
+    }
+    
+    if (BU_STR_EQUAL(av[1], "errorprop") || BU_STR_EQUAL(av[1], "all")) {
+        test_count++;
+        if (test_error_propagation() == 0) passed_count++;
     }
     
     if (test_count == 0) {

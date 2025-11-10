@@ -990,6 +990,11 @@ event_check(struct mged_state *s, int non_blocking)
 
     /* Let cool Tk event handler do most of the work */
 
+    /* If server is running, we need to poll in non-blocking mode to check server events */
+    if (s && s->server && s->server->running) {
+	non_blocking = 1;
+    }
+
     if (non_blocking) {
 
 	/* When in non_blocking-mode, we want to deal with as many
@@ -1012,6 +1017,14 @@ event_check(struct mged_state *s, int non_blocking)
 
     if (s->dbip == DBI_NULL)
 	return non_blocking;
+
+    /* Check socket server events if enabled */
+    if (s && s->server && s->server->running) {
+	if (mged_server_poll(s->server, 0) < 0) {
+	    bu_log("Socket server error, shutting down\n");
+	    s->server->running = 0;
+	}
+    }
 
     /*********************************
      * Handle rate-based processing *
@@ -1782,6 +1795,16 @@ mged_finish(struct mged_state *s, int exitcode)
     bu_vls_free(&s->input_str_prefix);
     bu_vls_free(&s->scratchline);
     bu_vls_free(&s-> mged_prompt);
+    /* Clean up socket server resources */
+    if (s->server) {
+        mged_server_cleanup(s->server);
+        bu_free(s->server, "socket server");
+        s->server = NULL;
+    }
+    if (s->socket_path_temp) {
+        bu_free(s->socket_path_temp, "socket path temp");
+        s->socket_path_temp = NULL;
+    }
     rt_edit_destroy(s->s_edit->e);
     BU_PUT(s->s_edit, struct mged_edit_state);
     BU_PUT(s, struct mged_state);
@@ -1821,6 +1844,7 @@ main(int argc, char *argv[])
 #endif
 
     int rateflag = 0;
+    int force_create = 0;  /* Force database creation without prompting */
     int c;
     int read_only_flag=0;
 
@@ -1848,6 +1872,7 @@ main(int argc, char *argv[])
     bu_vls_init(&s->scratchline);
     bu_vls_init(&s->mged_prompt);
     s->dpy_string = NULL;
+    s->socket_path_temp = NULL;  /* Initialize socket path temp storage */
 
     /* Set up linked lists */
     s->vlfree = &rt_vlfree;
@@ -1879,7 +1904,7 @@ main(int argc, char *argv[])
 #endif
 
     bu_optind = 1;
-    while ((c = bu_getopt(argc, argv, "a:d:hbcCorx:X:v?s:")) != -1) {
+    while ((c = bu_getopt(argc, argv, "a:d:hbcCorx:X:v?f?s:")) != -1) {
 	if (bu_optopt == '?') c='h';
 	switch (c) {
 	    case 'a':
@@ -1917,6 +1942,9 @@ main(int argc, char *argv[])
 		       bu_version());
 		return EXIT_SUCCESS;
 		break;
+    case 'f':
+		force_create = 1;
+		break;
 	    case 'o':
 		/* Eventually this will be used for the old mged gui.
 		 * I'm temporarily hijacking it for the new gui until
@@ -1926,51 +1954,68 @@ main(int argc, char *argv[])
 		old_mged_gui = 0;
 		break;
 	    case 's':
-		/* Socket server mode - run as server only */
+		/* Socket server mode - enable socket server alongside normal operation */
 		{
+		    /* Store socket path for later use during initialization */
 		    const char *socket_path = bu_optarg;
-		    struct mged_server server;
 		    
-		    bu_log("Starting MGED socket server on %s\n", socket_path);
-		    
-		    if (mged_server_init(&server, socket_path) < 0) {
-			bu_exit(EXIT_FAILURE, "Failed to initialize server\n");
-		    }
-		    
-		    if (mged_server_start(&server) < 0) {
-			mged_server_cleanup(&server);
-			bu_exit(EXIT_FAILURE, "Failed to start server\n");
-		    }
-		    
-		    /* Server mode main loop */
-		    while (server.running) {
-			/* Check for server events (short timeout to stay responsive) */
-			int ret = mged_server_poll(&server, 10);
-			if (ret < 0) {
-			    /* Handle poll error */
-			    bu_log("Server poll error, shutting down\n");
-			    break;
+		    /* Initialize socket server, but don't start exclusive mode */
+		    if (!s->server) {
+			/* Allocate server structure in mged_state */
+			s->server = (struct mged_server *)bu_calloc(1, sizeof(struct mged_server), "socket server");
+			if (!s->server) {
+			    bu_exit(EXIT_FAILURE, "Failed to allocate server structure\n");
 			}
 			
-			/* Handle mged events if needed */
-			if (s->gedp) {
-			    /* Process any existing mged events */
-			    Tcl_DoOneEvent(TCL_ALL_EVENTS|TCL_DONT_WAIT);
+			/* Store socket path in a temporary place to survive memset */
+			/* Note: Delay setting socket_path in server until mged_server_init */
+			if (!s->socket_path_temp) {
+			    s->socket_path_temp = bu_strdup(socket_path);
 			}
-			
-			/* Call refresh to handle display updates and timing */
-			refresh(s);
 		    }
 		    
-		    mged_server_cleanup(&server);
-		    bu_exit(EXIT_SUCCESS, "Server shutdown\n");
+		    break;
 		}
-		break;
 	    default:
 		bu_log("Unrecognized option (%c)\n", bu_optopt);
 		/* fall through */
 	    case 'h':
-		bu_exit(1, "Usage:  %s [-a attach] [-b] [-c|-C] [-f] [-d display] [-h|?] [-r] [-s socket_path] [-x#] [-X#] [-v] [database [command]]\n", argv[0]);
+		bu_exit(1, "MGED - Multi-display Graphics EDitor\n\
+\n\
+A powerful interactive solid modeling editor for creating and modifying\n\
+3D geometry. MGED provides both command-line and graphics interfaces\n\
+for designing and analyzing geometric models.\n\
+\n\
+Usage:  %s [-a attach] [-b] [-c|-C] [-f] [-d display] [-h|?] [-r] [-s socket_path] [-x#] [-X#] [-v] [database [command]]\n\
+\n\
+Arguments:\n\
+  database       Path to a BRL-CAD geometry database file (.g)\n\
+  command       Command to execute before entering interactive mode\n\
+\n\
+Options:\n\
+  -a attach        Specifies display manager to automatically attach to when starting MGED\n\
+                   Common attach options: nu (NULL), X (X11), ogl (OpenGL)\n\
+  -b               Start MGED as a background process\n\
+  -c               Start using classic mode instead of default Tcl/Tk-based GUI\n\
+  -C               Start interactive MGED interface (default when graphics available)\n\
+  -d display       Specify which X server to connect to (HOST:PORT format)\n\
+  -f               Force database creation without prompting if it doesn't exist\n\
+  -h, -?           Print this help statement and exit\n\
+  -o               Developer option (old mged gui toggle)\n\
+  -r               Open database in read-only mode\n\
+  -s socket_path   Enable socket server on UNIX domain socket at socket_path\n\
+                   Server runs alongside normal MGED interface, sharing\n\
+                   the same database instance with all connected clients\n\
+  -x #             Specify debug level of librt\n\
+  -X #             Specify debug level of libbu\n\
+  -v               Display version information and exit\n\
+\n\
+Examples:\n\
+  mged model.g                          Start MGED in GUI mode with model.g\n\
+  mged -c model.g ls                    Run 'ls' command on model.g without starting GUI\n\
+  mged -a nu model.g                    Start with NULL display manager (no graphics)\n\
+  mged -s /tmp/mged.sock model.g       Start with socket server for external connections\n\
+  mged -r model.g                       Open model.g in read-only mode\n", argv[0]);
 	}
     }
 
@@ -2221,20 +2266,30 @@ main(int argc, char *argv[])
     if (!s->interactive || s->classic_mged || old_mged_gui) {
 	/* Open the database */
 	if (argc >= 1) {
-	    const char *av[3];
+	    const char *av[4];
+	    int ac = 2;
 
 	    av[0] = "opendb";
 	    av[1] = argv[0];
-	    av[2] = NULL;
+	    
+	    /* If force_create is set, add the -c flag */
+	    if (force_create) {
+		av[2] = "-c";
+		av[3] = NULL;
+		ac = 3;
+	    } else {
+		av[2] = NULL;
+		ac = 2;
+	    }
 
 	    /* Command line may have more than 2 args, opendb only wants 2
 	     * expecting second to be the file name.
-	     * NOTE: this way makes it so f_opendb does not care about y/n
+	     * If force_create is set, we pass -c which tells f_opendb to create without prompt
 	     * and always create a new db if one does not exist since we want
 	     * to allow mged to process args after the db as a command
 	     */
 	    struct cmdtab ec = {MGED_CMD_MAGIC, NULL, NULL, NULL, s};
-	    if (f_opendb(&ec, s->interp, 2, av) == TCL_ERROR) {
+	    if (f_opendb(&ec, s->interp, ac, av) == TCL_ERROR) {
 		if (!run_in_foreground && use_pipe) {
 		    notify_parent_done(parent_pipe[1]);
 		}
@@ -2522,6 +2577,27 @@ main(int argc, char *argv[])
     }
 
     mged_global_db_ctx.init_flag = 0; /* all done with initialization */
+
+    /* Initialize socket server if enabled */
+    if (s->server) {
+	const char *socket_path = s->socket_path_temp ? s->socket_path_temp : "";
+	bu_log("Starting MGED socket server on %s\n", socket_path);
+	
+	if (mged_server_init(s->server, socket_path) < 0) {
+	    bu_exit(EXIT_FAILURE, "Failed to initialize server\n");
+	}
+	
+	/* Clean up temporary path storage after successful initialization */
+	if (s->socket_path_temp) {
+	    bu_free(s->socket_path_temp, "socket path temp");
+	    s->socket_path_temp = NULL;
+	}
+	
+	if (mged_server_start(s->server) < 0) {
+	    mged_server_cleanup(s->server);
+	    bu_exit(EXIT_FAILURE, "Failed to start server\n");
+	}
+    }
 
     /**************** M A I N   L O O P *********************/
     while (1) {

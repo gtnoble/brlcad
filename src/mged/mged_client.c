@@ -1,5 +1,6 @@
 #include "mged_client.h"
 #include "mged_protocol.h"
+#include "mged.h"
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -22,14 +23,8 @@ struct client_session *create_client_session(int fd) {
     bu_vls_init(&client->input_buffer);
     bu_vls_init(&client->output_buffer);
     
-    // Create GED instance for this client
-    client->gedp = ged_create();
-    if (!client->gedp) {
-        bu_vls_free(&client->input_buffer);
-        bu_vls_free(&client->output_buffer);
-        free(client);
-        return NULL;
-    }
+    // Note: Clients use the shared MGED_STATE->gedp for command execution
+    // No per-client database instance created here
     
     return client;
 }
@@ -42,10 +37,8 @@ void free_client_session(struct client_session *client) {
         close(client->fd);
     }
     
-    // Free GED instance
-    if (client->gedp) {
-        ged_close(client->gedp);
-    }
+    // Don't free GED instance - it's shared with main MGED
+    // The client just references the main MGED_STATE->gedp
     
     // Free buffers
     bu_vls_free(&client->input_buffer);

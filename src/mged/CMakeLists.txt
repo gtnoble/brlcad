@@ -83,6 +83,7 @@ if(BRLCAD_ENABLE_TCL)
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../libtermio
+    ${CMAKE_SOURCE_DIR}/include
   )
   brlcad_addexec(mged "${MGED_SOURCES}" "${mged_libs}")
   if(TK_LIBRARY)

@@ -73,6 +73,7 @@
 #include "bu/vls.h"
 #include "ged.h"
 #include "wdb.h"
+#include "mged_server.h"
 
 /* Needed to define struct bv_scene_obj */
 #include "bv/defines.h"
@@ -95,6 +96,7 @@
 
 /* Forward declaration */
 struct mged_state;
+struct mged_server; /* Forward declaration for socket server */
 
 /* Tolerances */
 struct mged_tol {
@@ -228,11 +230,15 @@ struct mged_state {
     char *dpy_string;
     struct bu_list *vlfree;
 
-    /* Editing related */
+/* Editing related */
     struct mged_edit_state *s_edit;
     int global_editing_state; // main global editing state (ugh)
 
-    /* called by numerous functions to indicate truthfully whether the
+    /* Socket server configuration */
+    struct mged_server *server;
+    char *socket_path_temp; /* Temporary storage for socket path during initialization */
+
+    /* called by numerous functions to indicate truthfully whether
      * views need to be redrawn. */
     int update_views;
 };

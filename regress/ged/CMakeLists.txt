@@ -26,6 +26,12 @@ if(TARGET libged)
   target_include_directories(regress_mged_client_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/mged)
   brlcad_regression_test(regress-ged_mged_client_tests "regress_mged_client_tests" EXEC regress_mged_client_tests)
   distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_mged_client_tests.log")
+
+  # MGED Socket Server Integration Tests
+  brlcad_addexec(regress_mged_integration_tests "mged_integration_tests.c;mged_mock_client.c;${CMAKE_SOURCE_DIR}/src/mged/mged_protocol.c" libged TEST_USESDATA)
+  target_include_directories(regress_mged_integration_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/mged)
+  brlcad_regression_test(regress-ged_mged_integration_tests "regress_mged_integration_tests" EXEC regress_mged_integration_tests)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_mged_integration_tests.log")
 endif(TARGET libged)
 
 cmakefiles(
@@ -40,6 +46,8 @@ cmakefiles(
   mged_server_protocol.c
   mged_server_core.c
   mged_client_tests.c
+  mged_mock_client.c
+  mged_integration_tests.c
 )
 
 # Local Variables:

@@ -93,6 +93,9 @@ project(
 )
 #######
 
+# Enable generation of compile_commands.json for clangd
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Policy CMP0009: FILE GLOB_RECURSE calls should not follow symlinks by default
 if(POLICY CMP0009)
   cmake_policy(SET CMP0009 NEW)

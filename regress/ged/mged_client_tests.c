@@ -58,10 +58,8 @@ int test_client_creation_and_cleanup() {
         result = -1;
     }
     
-    if (client->gedp == NULL) {
-        bu_log("ERROR: Client GED instance not created\n");
-        result = -1;
-    }
+    // Note: Clients use the shared MGED_STATE->gedp for command execution
+    // No per-client GED instance is created
     
     if (client->state != CLIENT_NEW) {
         bu_log("ERROR: Client state not set to NEW\n");
@@ -235,11 +233,7 @@ int test_multiple_clients() {
             goto cleanup;
         }
         
-        if (clients[i]->gedp == NULL) {
-            bu_log("ERROR: Client %d has NULL GED instance\n", i);
-            result = -1;
-            goto cleanup;
-        }
+        // Note: All clients share the main MGED_STATE->gedp, no per-client instance
     }
     
     // Test that clients are independent

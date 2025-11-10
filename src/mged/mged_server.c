@@ -1,4 +1,5 @@
 #include "bu.h"
+#include "mged.h"
 #include "mged_server.h"
 #include "mged_client.h"
 #include "mged_protocol.h"
@@ -19,7 +20,9 @@ int mged_server_init(struct mged_server *server, const char *socket_path) {
     
     // Initialize server structure
     memset(server, 0, sizeof(*server));
+    // Set socket path after memset to avoid clearing it
     strncpy(server->socket_path, socket_path, sizeof(server->socket_path) - 1);
+    server->socket_path[sizeof(server->socket_path) - 1] = '\0';  // Ensure null termination
     
     // Create Unix domain socket
     server->server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -99,6 +102,7 @@ int mged_server_start(struct mged_server *server) {
         return -1;
     }
     
+    server->running = 1;
     bu_log("MGED server listening on %s\n", server->socket_path);
     return 0;
 }
@@ -295,13 +299,42 @@ void handle_client_read(struct mged_server *server, int poll_index) {
         }
         
         // Execute command
-        int result = ged_exec(client->gedp, req->argc, (const char **)req->argv);
+        // Clear result buffer before command execution
+        if (MGED_STATE && MGED_STATE->gedp && MGED_STATE->gedp->ged_result_str) {
+            bu_vls_trunc(MGED_STATE->gedp->ged_result_str, 0);
+        }
         
-        // Format response
+        // Check if gedp is valid
+        if (!MGED_STATE || !MGED_STATE->gedp) {
+            format_protocol_response(&client->output_buffer, "ERR", "", "ERR_INTERNAL");
+            update_poll_events(server, client->fd, POLLOUT);
+            free_command_request(req);
+            return;
+        }
+        
+        // Make a defensive copy of argv since ged_exec may modify it
+        // (specifically, it may replace argv[0] with a static string if NULL)
+        const char **argv_copy = (const char **)bu_calloc(req->argc + 1, sizeof(char*), "argv copy");
+        for (int i = 0; i < req->argc; i++) {
+            argv_copy[i] = req->argv[i];
+        }
+        argv_copy[req->argc] = NULL;
+        
+        int result = ged_exec(MGED_STATE->gedp, req->argc, argv_copy);
+        
+        // Free the copy (but not the strings, which are still owned by req)
+        bu_free(argv_copy, "argv copy");
+        
+        // Format response with additional output from command
+        const char *result_text = "";
+        if (MGED_STATE && MGED_STATE->gedp && MGED_STATE->gedp->ged_result_str && bu_vls_strlen(MGED_STATE->gedp->ged_result_str) > 0) {
+            result_text = bu_vls_cstr(MGED_STATE->gedp->ged_result_str);
+        }
+        
         if (result == 0) {
-            format_protocol_response(&client->output_buffer, "OK", "Command completed", "");
+            format_protocol_response(&client->output_buffer, "OK", result_text, "");
         } else {
-            format_protocol_response(&client->output_buffer, "ERR", "", "ERR_COMMAND");
+            format_protocol_response(&client->output_buffer, "ERR", result_text, "ERR_COMMAND");
         }
         
         // Remove processed request from input buffer

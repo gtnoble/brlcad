@@ -1,0 +1,58 @@
+# Values set at CMake configure time 
+set(CBDIR "@CMAKE_CURRENT_BINARY_DIR@")
+set(CSDIR "@CMAKE_CURRENT_SOURCE_DIR@")
+set(LOGFILE "${CBDIR}/regress-ged_mged_integration_tests.log")
+
+file(WRITE "${LOGFILE}" "Starting mged_integration_tests test run\n")
+
+# The executable locations aren't know at CMake configure time, so it is passed
+# in via the EXEC variable at runtime by a generator expression in the parent
+# build.  De-quote it and assign it to an appropriate variable.
+string(REPLACE "\\" "" INTEGRATION_EXEC "${EXEC}")
+if(NOT EXISTS "${INTEGRATION_EXEC}")
+  file(WRITE "${LOGFILE}" "mged_integration_tests test program not found at location \"${INTEGRATION_EXEC}\" - aborting\n")
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "Unable to find mged_integration_tests test program, aborting.\nSee ${LOGFILE} for more details.\n${LOG}")
+endif(NOT EXISTS "${INTEGRATION_EXEC}")
+
+# Run integration tests
+file(APPEND "${LOGFILE}" "Running ${INTEGRATION_EXEC} all\n")
+execute_process(
+  COMMAND "${INTEGRATION_EXEC}" "all"
+  RESULT_VARIABLE integration_result
+  OUTPUT_VARIABLE integration_log
+  ERROR_VARIABLE integration_log
+  WORKING_DIRECTORY ${CBDIR}
+)
+file(APPEND "${LOGFILE}" "${integration_log}")
+if(integration_result)
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "[regress-ged_mged_integration_tests] Failure: ${integration_result}. See ${LOGFILE} for more info.\n${LOG}")
+endif(integration_result)
+
+# Run individual tests for detailed output
+set(TEST_NAMES startup communication errors concurrent)
+foreach(test_name ${TEST_NAMES})
+  file(APPEND "${LOGFILE}" "Running ${INTEGRATION_EXEC} ${test_name}\n")
+  execute_process(
+    COMMAND "${INTEGRATION_EXEC}" "${test_name}"
+    RESULT_VARIABLE integration_result
+    OUTPUT_VARIABLE integration_log
+    ERROR_VARIABLE integration_log
+    WORKING_DIRECTORY ${CBDIR}
+  )
+  file(APPEND "${LOGFILE}" "${integration_log}")
+  if(integration_result)
+    file(READ "${LOGFILE}" LOG)
+    message(FATAL_ERROR "[regress-ged_mged_integration_tests] Failure in ${test_name}: ${integration_result}. See ${LOGFILE} for more info.\n${LOG}")
+  endif(integration_result)
+endforeach(test_name)
+
+file(APPEND "${LOGFILE}" "All mged_integration_tests tests completed successfully\n")
+
+# Local Variables:
+# tab-width: 8
+# mode: cmake
+# indent-tabs-mode: t
+# End:
+# ex: shiftwidth=2 tabstop=8

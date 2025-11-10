@@ -22,8 +22,17 @@ struct command_request *parse_protocol_request(const char *buffer, size_t len) {
         }
         memcpy(req->command, buffer, cmd_len);
         req->command[cmd_len] = '\0';
-        req->argc = 0;
-        req->argv = NULL;
+        
+        // ged_exec expects argv[0] to be the command name
+        req->argc = 1;
+        req->argv = (char **)calloc(2, sizeof(char*));
+        if (!req->argv) {
+            free(req->command);
+            free(req);
+            return NULL;
+        }
+        req->argv[0] = strdup(req->command);
+        req->argv[1] = NULL;
         return req;
     }
     
@@ -47,18 +56,27 @@ struct command_request *parse_protocol_request(const char *buffer, size_t len) {
     }
     
     if (args_len == 0) {
-        req->argc = 0;
-        req->argv = NULL;
+        // Command with no arguments, but argv[0] must be command name
+        req->argc = 1;
+        req->argv = (char **)calloc(2, sizeof(char*));
+        if (!req->argv) {
+            free(req->command);
+            free(req);
+            return NULL;
+        }
+        req->argv[0] = strdup(req->command);
+        req->argv[1] = NULL;
         return req;
     }
     
-    // Count arguments
-    req->argc = 1;  // At least one argument
+    // Count arguments (not including command name at argv[0])
+    int arg_count = 1;  // At least one argument
     for (const char *p = args_start; p < args_start + args_len; p++) {
-        if (*p == PROTOCOL_RS) req->argc++;
+        if (*p == PROTOCOL_RS) arg_count++;
     }
     
-    // Allocate argv array
+    // Allocate argv array (command name + arguments + NULL terminator)
+    req->argc = arg_count + 1;  // +1 for command name at argv[0]
     req->argv = (char **)calloc(req->argc + 1, sizeof(char*));
     if (!req->argv) {
         free(req->command);
@@ -66,11 +84,22 @@ struct command_request *parse_protocol_request(const char *buffer, size_t len) {
         return NULL;
     }
     
-    // Extract arguments
-    int arg_idx = 0;
+    // Set argv[0] to command name
+    req->argv[0] = strdup(req->command);
+    if (!req->argv[0]) {
+        free(req->argv);
+        free(req->command);
+        free(req);
+        return NULL;
+    }
+    
+    // Extract arguments starting at argv[1]
+    int arg_idx = 1;
     const char *arg_start = args_start;
-    for (const char *p = args_start; p <= args_start + args_len; p++) {
-        if (*p == PROTOCOL_RS || p == args_start + args_len) {
+    
+    // Process arguments separated by RS
+    for (const char *p = args_start; p < args_start + args_len; p++) {
+        if (*p == PROTOCOL_RS) {
             size_t arg_len = p - arg_start;
             
             req->argv[arg_idx] = (char *)malloc(arg_len + 1);
@@ -90,6 +119,26 @@ struct command_request *parse_protocol_request(const char *buffer, size_t len) {
             arg_idx++;
             arg_start = p + 1;
         }
+    }
+    
+    // Process final argument (no trailing RS)
+    if (arg_start < args_start + args_len) {
+        size_t arg_len = (args_start + args_len) - arg_start;
+        
+        req->argv[arg_idx] = (char *)malloc(arg_len + 1);
+        if (!req->argv[arg_idx]) {
+            // Cleanup on allocation failure
+            for (int i = 0; i < arg_idx; i++) {
+                free(req->argv[i]);
+            }
+            free(req->argv);
+            free(req->command);
+            free(req);
+            return NULL;
+        }
+        
+        memcpy(req->argv[arg_idx], arg_start, arg_len);
+        req->argv[arg_idx][arg_len] = '\0';
     }
     
     return req;

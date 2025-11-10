@@ -16,7 +16,6 @@ enum client_state {
 // Client session structure
 struct client_session {
     int fd;
-    struct ged *gedp;
     struct bu_vls input_buffer;
     struct bu_vls output_buffer;
     enum client_state state;

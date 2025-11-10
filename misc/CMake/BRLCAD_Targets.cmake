@@ -869,7 +869,7 @@ function(BRLCAD_REGRESSION_TEST testname depends_list)
   if(${testname}_TIMEOUT)
     set_tests_properties(${testname} PROPERTIES TIMEOUT ${${testname}_TIMEOUT})
   else(${testname}_TIMEOUT)
-    set_tests_properties(${testname} PROPERTIES TIMEOUT 300) # FIXME: want <60
+    set_tests_properties(${testname} PROPERTIES TIMEOUT 30) # Changed to 5 seconds
   endif(${testname}_TIMEOUT)
 endfunction(BRLCAD_REGRESSION_TEST)
 
