@@ -40,7 +40,6 @@
 // Test helper functions
 int test_server_startup(void) {
     const char *socket_path = "/tmp/test_mged_integration.sock";
-    const char *db_path = NULL;  // Use temporary database
     const char *mged_cmd = NULL;
     pid_t mged_pid = -1;
     int result = 0;

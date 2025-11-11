@@ -35,19 +35,17 @@
 #include <bu.h>
 #include <ged.h>
 
+// Include mged.h to get the full mged_state definition
+#include "../../src/mged/mged.h"
+
 // Include the server headers from the source tree
 #include "../../src/mged/mged_server.h"
 #include "../../src/mged/mged_client.h"
 #include "../../src/mged/mged_protocol.h"
 
-// For testing purposes, define a minimal MGED_STATE
-// since the actual definition is in mged.c which we don't include
-struct ged;  // Forward declaration
-
-struct mged_state {
-    struct ged *gedp;
-};
-
+// MGED_STATE is declared as extern in mged.h, but since this test doesn't link
+// against mged.c, we need to provide the definition here.
+// Note: mged.h already has the extern declaration, so we just define it.
 struct mged_state *MGED_STATE = NULL;
 
 // Test helper functions
