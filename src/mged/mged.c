@@ -1020,7 +1020,7 @@ event_check(struct mged_state *s, int non_blocking)
 
     /* Check socket server events if enabled */
     if (s && s->server && s->server->running) {
-	if (mged_server_poll(s->server, 0) < 0) {
+	if (mged_server_poll(s->server, 10) < 0) {
 	    bu_log("Socket server error, shutting down\n");
 	    s->server->running = 0;
 	}
