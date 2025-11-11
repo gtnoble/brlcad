@@ -22,6 +22,7 @@
       <arg choice="opt" rep="norepeat">-d display</arg>
       <arg choice="opt" rep="norepeat">-h|? </arg>
       <arg choice="opt" rep="norepeat">-r </arg>
+      <arg choice="opt" rep="norepeat">-s socket_path</arg>
       <arg choice="opt" rep="norepeat">-x#</arg>
       <arg choice="opt" rep="norepeat">-X#</arg>
       <arg choice="opt" rep="norepeat">-v</arg>
@@ -137,6 +138,34 @@
 	<listitem>
 	  <para>
 	    Opens the database.g file in read-only mode.
+	  </para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term><option>-s socket_path</option></term>
+	<listitem>
+	  <para>
+	    Enable the socket server interface on the specified Unix domain socket path.
+	    This allows external programs and scripts to connect and execute GED commands
+	    programmatically without requiring interaction with the MGED user interface.
+	  </para>
+	  <para>
+	    The socket server is typically used with the <option>-c</option> option
+	    (classic mode) and <option>-a nu</option> option (NULL display manager) for
+	    headless automation scenarios. However, it can also be used alongside the
+	    standard MGED graphical interface, allowing both interactive and programmatic
+	    access to the same geometry database simultaneously.
+	  </para>
+	  <para>
+	    All socket clients share the same database instance. Changes made via the
+	    socket interface are immediately visible in MGED's interface and vice versa.
+	    The server supports up to 256 concurrent client connections and uses a
+	    lightweight Unicode control character protocol that is language-agnostic.
+	  </para>
+	  <para>
+	    Access to the socket is controlled by filesystem permissions. Ensure the
+	    socket path is created in a directory with appropriate permissions to
+	    prevent unauthorized access, as the server provides no built-in authentication.
 	  </para>
 	</listitem>
       </varlistentry>
@@ -274,6 +303,24 @@ ATTACHING X (X Window System (X11))
 
 mged&gt;
 	</literallayout>
+      </para>
+    </example>
+
+    <example><title>Running <application>MGED</application> with socket server for programmatic access.</title>
+
+      <para>
+	<prompt>user:~ </prompt><userinput>mged -c -a nu -s /tmp/mged.sock model.g</userinput>
+	<literallayout class="normal">
+BRL-CAD Release 7.x.x  Geometry Editor (MGED)
+    ...
+
+ATTACHING nu (Null Display Manager)
+
+mged&gt;
+	</literallayout>
+	The socket server is now listening on <filename>/tmp/mged.sock</filename> and
+	external programs can connect to execute commands. The MGED command prompt
+	remains available for interactive use while the socket server runs in the background.
       </para>
     </example>
 

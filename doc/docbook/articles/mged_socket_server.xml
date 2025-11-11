@@ -1,0 +1,707 @@
+<article xmlns="http://docbook.org/ns/docbook" version="5.0">
+  <info><title>MGED Socket Server Interface</title>
+
+    <author><personname><firstname>BRL-CAD</firstname><surname>Team</surname></personname></author>
+  </info>
+
+
+  <section xml:id="About_MGED_Socket_Server"><info><title>About MGED Socket Server</title></info>
+
+    <para>
+      The <application>MGED</application> Socket Server provides a programmatic interface to
+      <application>MGED</application>'s geometry editing capabilities via Unix domain sockets.
+      This interface enables external applications, scripts, and automation tools to execute
+      geometry commands without requiring direct interaction with the MGED user interface.
+    </para>
+
+    <para>
+      The socket server was designed to support workflow automation, batch processing, and
+      integration with external CAD/CAM systems. It implements a lightweight Unicode control
+      character protocol that is language-agnostic and can be implemented in any programming
+      language that supports Unix domain sockets.
+    </para>
+
+    <para>
+      Key features of the MGED Socket Server include:
+
+      <itemizedlist mark="bullet"><listitem><para>
+            Full access to all GED (Geometry EDitor) commands via a simple text protocol
+          </para></listitem><listitem><para>
+            Support for concurrent connections (up to 256 simultaneous clients)
+          </para></listitem><listitem><para>
+            Shared database access - all clients operate on the same geometry database instance
+          </para></listitem><listitem><para>
+            Non-blocking event-driven architecture with minimal performance overhead
+          </para></listitem><listitem><para>
+            Language-agnostic protocol suitable for C, Python, shell scripts, and other languages
+          </para></listitem></itemizedlist>
+    </para>
+
+  </section>
+
+  <section xml:id="MGED_Socket_Server_Basic_Syntax"><info><title>Basic Syntax and Operations</title></info>
+
+
+    <section xml:id="Command_Line_Options"><info><title>Command Line Options</title></info>
+
+      <para>
+        To start <application>MGED</application> with the socket server enabled, use the
+        <option>-s</option> option to specify the Unix domain socket path:
+
+        <cmdsynopsis sepchar=" ">
+          <command>mged</command>
+          <arg choice="opt" rep="norepeat">-c</arg>
+          <arg choice="opt" rep="norepeat">-a nu</arg>
+          <arg choice="req" rep="norepeat">-s socket_path</arg>
+          <arg choice="req" rep="norepeat"><replaceable>database.g</replaceable></arg>
+        </cmdsynopsis>
+      </para>
+
+      <para>
+        The <option>-c</option> option instructs MGED to use classic (non-GUI) mode, and
+        <option>-a nu</option> attaches the NULL display manager to avoid requiring a graphical
+        display. The <option>-s</option> option specifies where the Unix domain socket will be
+        created in the filesystem.
+      </para>
+
+      <para>
+        Important considerations when starting the socket server:
+
+        <informaltable>
+          <tgroup cols="2" align="left">
+            <colspec colwidth="1*"/>
+            <colspec colwidth="3*"/>
+            <tbody>
+              <row>
+                <entry><emphasis role="bold">Display Manager</emphasis></entry>
+                <entry>The NULL (<emphasis>nu</emphasis>) display manager is recommended for
+                  headless server deployments. Other display managers can be used if a
+                  graphical display is available.</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">Socket Path</emphasis></entry>
+                <entry>The socket path must be accessible to client processes. File system
+                  permissions control access to the socket.</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">Database File</emphasis></entry>
+                <entry>A database file must be specified. All socket clients will share access
+                  to this database instance.</entry>
+              </row>
+            </tbody>
+          </tgroup>
+        </informaltable>
+      </para>
+    </section>
+
+    <section xml:id="Starting_Server_and_Connecting"><info><title>Starting the Server and Connecting</title></info>
+
+      <para>
+        Starting the MGED socket server is straightforward. From the operating system command line:
+
+        <literallayout class="monospaced">
+$ mged -c -a nu -s /tmp/mged.sock model.g
+BRL-CAD Release 7.x.x  Geometry Editor (MGED)
+    ...
+ATTACHING nu (Null Display Manager)
+mged&gt;
+        </literallayout>
+
+        The server is now running and listening for connections on <filename>/tmp/mged.sock</filename>.
+        The MGED command prompt remains available for interactive use while the socket server operates
+        in the background.
+      </para>
+
+      <para>
+        Clients connect to the server using standard Unix domain socket system calls. The socket path
+        specified with <option>-s</option> must match the path used by clients. Once connected, clients
+        can immediately begin sending commands.
+      </para>
+    </section>
+
+  </section>
+
+  <section xml:id="Protocol_Specification"><info><title>Protocol Specification</title></info>
+
+    <para>
+      The MGED Socket Server protocol uses Unicode control characters for message framing and field
+      separation. This approach was chosen because control characters are rarely found in normal text,
+      have single-byte UTF-8 encodings, and are standardized across platforms.
+    </para>
+
+    <section xml:id="Control_Characters"><info><title>Control Characters</title></info>
+
+      <para>
+        Three control characters from the C1 control block are used for protocol framing:
+
+        <informaltable>
+          <tgroup cols="4" align="center">
+            <colspec colwidth="1*"/>
+            <colspec colwidth="1*"/>
+            <colspec colwidth="2*"/>
+            <colspec colwidth="3*"/>
+            <thead>
+              <row>
+                <entry><emphasis role="bold">Character</emphasis></entry>
+                <entry><emphasis role="bold">Hex Value</emphasis></entry>
+                <entry><emphasis role="bold">Name</emphasis></entry>
+                <entry><emphasis role="bold">Purpose</emphasis></entry>
+              </row>
+            </thead>
+            <tbody>
+              <row>
+                <entry>FS (␜)</entry>
+                <entry>\x1C</entry>
+                <entry>File Separator</entry>
+                <entry>Message terminator - marks end of request or response</entry>
+              </row>
+              <row>
+                <entry>GS (␝)</entry>
+                <entry>\x1D</entry>
+                <entry>Group Separator</entry>
+                <entry>Field separator - separates command/arguments and status/result/error</entry>
+              </row>
+              <row>
+                <entry>RS (␞)</entry>
+                <entry>\x1E</entry>
+                <entry>Record Separator</entry>
+                <entry>Argument separator - separates individual command arguments</entry>
+              </row>
+            </tbody>
+          </tgroup>
+        </informaltable>
+      </para>
+
+      <para>
+        The Unicode symbols ␜, ␝, and ␞ shown in the table are visual representations for documentation
+        purposes. Actual protocol messages use the literal control characters (\x1C, \x1D, \x1E).
+      </para>
+    </section>
+
+    <section xml:id="Request_Format"><info><title>Request Format</title></info>
+
+      <para>
+        Client requests follow this format:
+
+        <literallayout class="monospaced">
+&lt;command&gt;␝&lt;arg1&gt;␞&lt;arg2&gt;␞...␞&lt;argN&gt;␝
+        </literallayout>
+
+        Breaking down the structure:
+
+        <informaltable>
+          <tgroup cols="2" align="left">
+            <colspec colwidth="1*"/>
+            <colspec colwidth="4*"/>
+            <tbody>
+              <row>
+                <entry><emphasis role="bold">&lt;command&gt;</emphasis></entry>
+                <entry>The GED command name (e.g., "ls", "in", "kill", "units")</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">␝</emphasis></entry>
+                <entry>Group Separator marking end of command and start of arguments</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">&lt;arg1&gt;␞&lt;arg2&gt;␞...</emphasis></entry>
+                <entry>Command arguments separated by Record Separator characters</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">␝</emphasis></entry>
+                <entry>File Separator marking end of message (message terminator)</entry>
+              </row>
+            </tbody>
+          </tgroup>
+        </informaltable>
+      </para>
+
+      <para>
+        Example requests:
+
+        <literallayout class="monospaced">
+ls␝                                    (list database contents)
+units␝                                 (query current units)
+in␝sphere.s␞sph␞0␞0␞0␞5␝              (create sphere)
+opendb␝/path/to/model.g␝               (open database)
+        </literallayout>
+      </para>
+    </section>
+
+    <section xml:id="Response_Format"><info><title>Response Format</title></info>
+
+      <para>
+        Server responses follow this format:
+
+        <literallayout class="monospaced">
+&lt;status&gt;␝&lt;result&gt;␝&lt;error&gt;␝
+        </literallayout>
+
+        Response field definitions:
+
+        <informaltable>
+          <tgroup cols="2" align="left">
+            <colspec colwidth="1*"/>
+            <colspec colwidth="4*"/>
+            <tbody>
+              <row>
+                <entry><emphasis role="bold">&lt;status&gt;</emphasis></entry>
+                <entry>Status code indicating success (OK) or error (ERR, ERR_PROTOCOL, etc.)</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">&lt;result&gt;</emphasis></entry>
+                <entry>Command output or result data (may be empty)</entry>
+              </row>
+              <row>
+                <entry><emphasis role="bold">&lt;error&gt;</emphasis></entry>
+                <entry>Error message if status indicates failure (empty on success)</entry>
+              </row>
+            </tbody>
+          </tgroup>
+        </informaltable>
+      </para>
+
+      <para>
+        Example responses:
+
+        <literallayout class="monospaced">
+OK␝mm␝␝                                (units command succeeded, result is "mm")
+OK␝sphere.s created␝␝                  (object creation succeeded)
+ERR␝␝Unknown command: invalid␝         (command not recognized)
+        </literallayout>
+      </para>
+    </section>
+
+    <section xml:id="Status_Codes"><info><title>Status Codes</title></info>
+
+      <para>
+        The server returns the following status codes:
+
+        <informaltable>
+          <tgroup cols="2" align="left">
+            <colspec colwidth="2*"/>
+            <colspec colwidth="5*"/>
+            <thead>
+              <row>
+                <entry><emphasis role="bold">Status Code</emphasis></entry>
+                <entry><emphasis role="bold">Description</emphasis></entry>
+              </row>
+            </thead>
+            <tbody>
+              <row>
+                <entry>OK</entry>
+                <entry>Command executed successfully. Result field contains command output.</entry>
+              </row>
+              <row>
+                <entry>ERR</entry>
+                <entry>General command execution error. Error field contains details.</entry>
+              </row>
+              <row>
+                <entry>ERR_PROTOCOL</entry>
+                <entry>Protocol violation (malformed request). Error field explains the issue.</entry>
+              </row>
+              <row>
+                <entry>ERR_NOMEM</entry>
+                <entry>Memory allocation failure during request processing.</entry>
+              </row>
+              <row>
+                <entry>ERR_COMMAND</entry>
+                <entry>Command execution failed. Error field contains command error message.</entry>
+              </row>
+              <row>
+                <entry>ERR_SYSTEM</entry>
+                <entry>System-level error (I/O failure, etc.).</entry>
+              </row>
+              <row>
+                <entry>ERR_INTERNAL</entry>
+                <entry>Internal server error. Should be rare; indicates a bug.</entry>
+              </row>
+            </tbody>
+          </tgroup>
+        </informaltable>
+      </para>
+    </section>
+
+  </section>
+
+  <section xml:id="Client_Development"><info><title>Client Development</title></info>
+
+    <para>
+      Client applications can be written in any language that supports Unix domain sockets.
+      BRL-CAD includes a Python-based example client that demonstrates the protocol and
+      provides an interactive debugging tool.
+    </para>
+
+    <section xml:id="Python_Client_Example"><info><title>Python Client Example</title></info>
+
+      <para>
+        The <filename>examples/mged_socket_debug.py</filename> script provides a complete
+        reference implementation of an MGED socket client. It demonstrates connection
+        establishment, command formatting, response parsing, and error handling.
+      </para>
+
+      <para>
+        Key implementation points illustrated by the Python client:
+
+        <itemizedlist mark="bullet"><listitem><para>
+              Unix domain socket connection using <literal>socket.AF_UNIX</literal>
+            </para></listitem><listitem><para>
+              Proper insertion of control characters (\x1C, \x1D, \x1E) for message framing
+            </para></listitem><listitem><para>
+              Automatic message termination with FS character
+            </para></listitem><listitem><para>
+              Response parsing to extract status, result, and error fields
+            </para></listitem><listitem><para>
+              Visual representation of control characters for user display (␜, ␝, ␞)
+            </para></listitem><listitem><para>
+              Color-coded output for improved readability
+            </para></listitem></itemizedlist>
+      </para>
+
+      <para>
+        Basic connection and command execution pattern in Python:
+
+        <programlisting language="python">
+import socket
+
+# Define protocol control characters
+FS = '\x1c'  # File Separator (message terminator)
+GS = '\x1d'  # Group Separator (field separator)
+RS = '\x1e'  # Record Separator (argument separator)
+
+# Connect to MGED socket server
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('/tmp/mged.sock')
+
+# Send a simple command: "units"
+command = f"units{FS}"
+sock.send(command.encode('utf-8'))
+
+# Receive response
+response = sock.recv(4096).decode('utf-8')
+
+# Parse response (expected format: &lt;status&gt;␝&lt;result&gt;␝&lt;error&gt;␝)
+fields = response.rstrip(FS).split(GS)
+status = fields[0] if len(fields) &gt; 0 else ""
+result = fields[1] if len(fields) &gt; 1 else ""
+error = fields[2] if len(fields) &gt; 2 else ""
+
+if status == "OK":
+    print(f"Success: {result}")
+else:
+    print(f"Error: {error}")
+
+sock.close()
+        </programlisting>
+      </para>
+
+      <para>
+        For commands with multiple arguments, use the Record Separator to delimit them:
+
+        <programlisting language="python">
+# Create a sphere at origin with radius 5
+# Command: in sphere.s sph 0 0 0 5
+command = f"in{GS}sphere.s{RS}sph{RS}0{RS}0{RS}0{RS}5{FS}"
+sock.send(command.encode('utf-8'))
+response = sock.recv(4096).decode('utf-8')
+# ... parse response as above ...
+        </programlisting>
+      </para>
+
+      <para>
+        The complete <filename>mged_socket_debug.py</filename> example provides an interactive
+        shell with special key bindings (Ctrl+G, Ctrl+R, Ctrl+F) to insert control characters,
+        making it useful for testing and debugging protocol interactions.
+      </para>
+    </section>
+
+  </section>
+
+  <section xml:id="Architecture_and_Behavior"><info><title>Architecture and Behavior</title></info>
+
+    <section xml:id="Shared_Database_Model"><info><title>Shared Database Model</title></info>
+
+      <para>
+        A critical characteristic of the MGED Socket Server is that all clients share the same
+        database instance. There is no per-client database isolation or copying. All socket
+        clients, the MGED command-line interface, and any attached graphical display operate
+        on a single shared <literal>ged</literal> database instance.
+      </para>
+
+      <caution>
+        <para>
+          Changes made through the socket interface are immediately visible to all other clients
+          and to MGED's interactive interface. Conversely, changes made interactively in MGED
+          are immediately visible to socket clients. There is no transaction isolation or
+          rollback capability.
+        </para>
+
+        <para>
+          This shared-state model means that concurrent clients must coordinate their activities
+          to avoid conflicts. For example, if one client deletes an object while another client
+          is modifying it, the results are undefined and may be inconsistent.
+        </para>
+      </caution>
+
+      <para>
+        The shared database model provides several benefits:
+
+        <itemizedlist mark="bullet"><listitem><para>
+              Real-time collaboration - multiple users or processes can observe and manipulate
+              the same geometry simultaneously
+            </para></listitem><listitem><para>
+              Memory efficiency - no duplication of potentially large geometry databases
+            </para></listitem><listitem><para>
+              Simplicity - no synchronization protocol needed between client views
+            </para></listitem></itemizedlist>
+      </para>
+    </section>
+
+    <section xml:id="Event_Loop_Integration"><info><title>Event Loop Integration</title></info>
+
+      <para>
+        The socket server is integrated into MGED's main event loop using a non-blocking,
+        poll-based architecture. Socket I/O is checked periodically via the <function>event_check()</function>
+        function, which uses <function>poll()</function> with a zero timeout to detect incoming
+        connections and data without blocking.
+      </para>
+
+      <para>
+        This design ensures that:
+
+        <itemizedlist mark="bullet"><listitem><para>
+              The MGED interactive interface remains responsive while serving socket clients
+            </para></listitem><listitem><para>
+              Socket server overhead is minimal (typically &lt;1ms per event loop iteration)
+            </para></listitem><listitem><para>
+              The server can handle multiple concurrent connections efficiently in a single thread
+            </para></listitem></itemizedlist>
+      </para>
+
+      <para>
+        The server supports up to 256 concurrent client connections (defined by <literal>MGED_MAX_CLIENTS</literal>).
+        This limit is sufficient for typical automation scenarios while keeping resource consumption
+        bounded.
+      </para>
+    </section>
+
+    <section xml:id="Command_Execution"><info><title>Command Execution</title></info>
+
+      <para>
+        Commands received via the socket interface are executed using the generic
+        <function>ged_exec()</function> function. This provides automatic support for all
+        existing GED commands without requiring individual command bindings or wrappers.
+      </para>
+
+      <para>
+        When a command is received:
+
+        <orderedlist><listitem><para>
+              The request is parsed to extract the command name and arguments
+            </para></listitem><listitem><para>
+              <function>ged_exec()</function> is called with the parsed command and arguments
+            </para></listitem><listitem><para>
+              The command executes atomically - other clients cannot interrupt mid-execution
+            </para></listitem><listitem><para>
+              The result is captured from <literal>gedp-&gt;ged_result_str</literal>
+            </para></listitem><listitem><para>
+              A response is formatted and sent back to the client
+            </para></listitem></orderedlist>
+      </para>
+
+      <para>
+        This architecture means that any command available in MGED is automatically available
+        via the socket interface, including future commands added to the GED library.
+      </para>
+    </section>
+
+    <section xml:id="Security_Considerations"><info><title>Security Considerations</title></info>
+
+      <warning>
+        <para>
+          The MGED Socket Server provides <emphasis role="bold">no authentication or authorization</emphasis>.
+          Any process that can access the Unix domain socket file can connect and execute arbitrary
+          GED commands with full privileges.
+        </para>
+
+        <para>
+          Access control is provided solely through filesystem permissions on the socket file.
+          Ensure that the socket path is created in a directory with appropriate permissions
+          to prevent unauthorized access.
+        </para>
+      </warning>
+
+      <para>
+        Security recommendations:
+
+        <itemizedlist mark="bullet"><listitem><para>
+              Create sockets in directories with restrictive permissions (e.g., mode 0700)
+            </para></listitem><listitem><para>
+              Use unique, unpredictable socket paths when multiple MGED instances run on the same system
+            </para></listitem><listitem><para>
+              Remove socket files when the server terminates (MGED does this automatically)
+            </para></listitem><listitem><para>
+              Do not expose socket paths to untrusted users or processes
+            </para></listitem><listitem><para>
+              Validate and sanitize command arguments in client code to prevent injection attacks
+            </para></listitem></itemizedlist>
+      </para>
+
+      <para>
+        The socket server is designed for trusted environments where all clients are
+        part of the same workflow or automation system. It is not suitable for untrusted
+        or adversarial environments without additional security measures.
+      </para>
+    </section>
+
+  </section>
+
+  <section xml:id="Practical_Examples"><info><title>Practical Examples</title></info>
+
+    <section xml:id="Example_Listing_Database"><info><title>Listing Database Contents</title></info>
+
+      <para>
+        Start MGED with socket server:
+
+        <literallayout class="monospaced">
+$ mged -c -a nu -s /tmp/mged.sock model.g
+        </literallayout>
+      </para>
+
+      <para>
+        From a Python client:
+
+        <programlisting language="python">
+import socket
+
+FS = '\x1c'
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('/tmp/mged.sock')
+
+# Send "ls" command
+sock.send(f"ls{FS}".encode('utf-8'))
+
+# Receive and display response
+response = sock.recv(4096).decode('utf-8')
+print(response)
+
+sock.close()
+        </programlisting>
+
+        Expected output:
+
+        <literallayout class="monospaced">
+OK␝_GLOBAL box1.s box2.r composite.c␝␝
+        </literallayout>
+      </para>
+    </section>
+
+    <section xml:id="Example_Creating_Geometry"><info><title>Creating Geometry</title></info>
+
+      <para>
+        Creating a sphere primitive:
+
+        <programlisting language="python">
+import socket
+
+FS = '\x1c'
+GS = '\x1d'
+RS = '\x1e'
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('/tmp/mged.sock')
+
+# Create sphere: in sphere.s sph 0 0 0 100
+command = f"in{GS}sphere.s{RS}sph{RS}0{RS}0{RS}0{RS}100{FS}"
+sock.send(command.encode('utf-8'))
+
+response = sock.recv(4096).decode('utf-8')
+fields = response.rstrip(FS).split(GS)
+
+if fields[0] == "OK":
+    print(f"Sphere created: {fields[1]}")
+else:
+    print(f"Error: {fields[2]}")
+
+sock.close()
+        </programlisting>
+
+        Expected output:
+
+        <literallayout class="monospaced">
+Sphere created: sphere.s
+        </literallayout>
+      </para>
+    </section>
+
+    <section xml:id="Example_Error_Handling"><info><title>Error Handling</title></info>
+
+      <para>
+        Handling command errors:
+
+        <programlisting language="python">
+import socket
+
+FS = '\x1c'
+GS = '\x1d'
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('/tmp/mged.sock')
+
+# Try to execute an invalid command
+command = f"nonexistent_command{FS}"
+sock.send(command.encode('utf-8'))
+
+response = sock.recv(4096).decode('utf-8')
+fields = response.rstrip(FS).split(GS)
+
+status = fields[0]
+error = fields[2] if len(fields) &gt; 2 else ""
+
+if status.startswith("ERR"):
+    print(f"Command failed with status: {status}")
+    print(f"Error message: {error}")
+
+sock.close()
+        </programlisting>
+
+        Expected output:
+
+        <literallayout class="monospaced">
+Command failed with status: ERR
+Error message: nonexistent_command: command not found
+        </literallayout>
+      </para>
+    </section>
+
+    <section xml:id="Example_Concurrent_Clients"><info><title>Concurrent Clients</title></info>
+
+      <para>
+        Multiple clients can connect simultaneously. Changes made by one client are
+        immediately visible to others:
+
+        <programlisting language="python">
+# Client 1: Create an object
+import socket
+FS, GS, RS = '\x1c', '\x1d', '\x1e'
+
+sock1 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock1.connect('/tmp/mged.sock')
+sock1.send(f"in{GS}sphere1.s{RS}sph{RS}0{RS}0{RS}0{RS}50{FS}".encode('utf-8'))
+response1 = sock1.recv(4096).decode('utf-8')
+
+# Client 2: List objects (will see sphere1.s created by Client 1)
+sock2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock2.connect('/tmp/mged.sock')
+sock2.send(f"ls{FS}".encode('utf-8'))
+response2 = sock2.recv(4096).decode('utf-8')
+# response2 will include "sphere1.s"
+
+sock1.close()
+sock2.close()
+        </programlisting>
+      </para>
+    </section>
+
+  </section>
+
+</article>

@@ -43,6 +43,7 @@ set(
   gcv.xml
   ged.xml
   mgedrc.xml
+  mged_socket_server.xml
   nirt.xml
   oed.xml
   pipes.xml
