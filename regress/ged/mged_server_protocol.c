@@ -51,13 +51,16 @@ int test_basic_command_parsing() {
         result = -1;
     }
     
-    if (req->argc != 0) {
-        bu_log("ERROR: Expected 0 arguments, got %d\n", req->argc);
+    if (req->argc != 1) {
+        bu_log("ERROR: Expected argc=1 (command only), got %d\n", req->argc);
         result = -1;
     }
     
-    if (req->argv != NULL) {
-        bu_log("ERROR: Expected NULL argv, got %p\n", (void *)req->argv);
+    if (req->argv == NULL) {
+        bu_log("ERROR: Expected argv with command, got NULL\n");
+        result = -1;
+    } else if (strcmp(req->argv[0], "ls") != 0) {
+        bu_log("ERROR: Expected argv[0]='ls', got '%s'\n", req->argv[0]);
         result = -1;
     }
     
@@ -90,12 +93,16 @@ int test_single_argument_parsing() {
         result = -1;
     }
     
-    if (req->argc != 1) {
-        bu_log("ERROR: Expected 1 argument, got %d\n", req->argc);
+    if (req->argc != 2) {
+        bu_log("ERROR: Expected argc=2 (command + 1 arg), got %d\n", req->argc);
         result = -1;
     } else {
-        if (strcmp(req->argv[0], "/path/to/dir") != 0) {
-            bu_log("ERROR: Expected argument '/path/to/dir', got '%s'\n", req->argv[0]);
+        if (strcmp(req->argv[0], "pwd") != 0) {
+            bu_log("ERROR: Expected argv[0]='pwd', got '%s'\n", req->argv[0]);
+            result = -1;
+        }
+        if (strcmp(req->argv[1], "/path/to/dir") != 0) {
+            bu_log("ERROR: Expected argv[1]='/path/to/dir', got '%s'\n", req->argv[1]);
             result = -1;
         }
     }
@@ -113,10 +120,10 @@ int test_single_argument_parsing() {
 
 int test_multiple_arguments_parsing() {
     struct command_request *req;
-    const char *test_cmd = "in\x1D" "sphere.s\x1E" "sph\x1E" "0\x1E" "0\x1E" "0\x1E" "5\x1C";
+    const char *test_cmd = "in\x1D" "sphere.s\x1D" "sph\x1D" "0\x1D" "0\x1D" "0\x1D" "5\x1C";
     int result = 0;
-    const char *expected_args[] = {"sphere.s", "sph", "0", "0", "0", "5"};
-    int expected_argc = 6;
+    const char *expected_argv[] = {"in", "sphere.s", "sph", "0", "0", "0", "5"};
+    int expected_argc = 7;  /* command + 6 args */
     
     bu_log("Testing multiple arguments parsing...\n");
     
@@ -132,12 +139,12 @@ int test_multiple_arguments_parsing() {
     }
     
     if (req->argc != expected_argc) {
-        bu_log("ERROR: Expected %d arguments, got %d\n", expected_argc, req->argc);
+        bu_log("ERROR: Expected argc=%d, got %d\n", expected_argc, req->argc);
         result = -1;
     } else {
         for (int i = 0; i < expected_argc; i++) {
-            if (strcmp(req->argv[i], expected_args[i]) != 0) {
-                bu_log("ERROR: Expected arg[%d] '%s', got '%s'\n", i, expected_args[i], req->argv[i]);
+            if (strcmp(req->argv[i], expected_argv[i]) != 0) {
+                bu_log("ERROR: Expected argv[%d]='%s', got '%s'\n", i, expected_argv[i], req->argv[i]);
                 result = -1;
             }
         }
@@ -172,12 +179,16 @@ int test_special_characters() {
         result = -1;
     }
     
-    if (req->argc != 1) {
-        bu_log("ERROR: Expected 1 argument, got %d\n", req->argc);
+    if (req->argc != 2) {
+        bu_log("ERROR: Expected argc=2, got %d\n", req->argc);
         result = -1;
     } else {
-        if (strcmp(req->argv[0], "\"my object\"") != 0) {
-            bu_log("ERROR: Expected argument '\"my object\"', got '%s'\n", req->argv[0]);
+        if (strcmp(req->argv[0], "draw") != 0) {
+            bu_log("ERROR: Expected argv[0]='draw', got '%s'\n", req->argv[0]);
+            result = -1;
+        }
+        if (strcmp(req->argv[1], "\"my object\"") != 0) {
+            bu_log("ERROR: Expected argv[1]='\"my object\"', got '%s'\n", req->argv[1]);
             result = -1;
         }
     }
@@ -211,8 +222,11 @@ int test_empty_command() {
         result = -1;
     }
     
-    if (req->argc != 0) {
-        bu_log("ERROR: Expected 0 arguments, got %d\n", req->argc);
+    if (req->argc != 1) {
+        bu_log("ERROR: Expected argc=1, got %d\n", req->argc);
+        result = -1;
+    } else if (strlen(req->argv[0]) != 0) {
+        bu_log("ERROR: Expected empty argv[0], got '%s'\n", req->argv[0]);
         result = -1;
     }
     
@@ -326,8 +340,8 @@ int test_partial_message_handling() {
         result = -1;
     }
     
-    if (req->argc != 0) {
-        bu_log("ERROR: Expected 0 arguments, got %d\n", req->argc);
+    if (req->argc != 1) {
+        bu_log("ERROR: Expected argc=1, got %d\n", req->argc);
         result = -1;
     }
     
@@ -347,12 +361,16 @@ int test_partial_message_handling() {
         result = -1;
     }
     
-    if (req->argc != 1) {
-        bu_log("ERROR: Expected 1 argument, got %d\n", req->argc);
+    if (req->argc != 2) {
+        bu_log("ERROR: Expected argc=2, got %d\n", req->argc);
         result = -1;
     } else {
-        if (strcmp(req->argv[0], "/path") != 0) {
-            bu_log("ERROR: Expected argument '/path', got '%s'\n", req->argv[0]);
+        if (strcmp(req->argv[0], "pwd") != 0) {
+            bu_log("ERROR: Expected argv[0]='pwd', got '%s'\n", req->argv[0]);
+            result = -1;
+        }
+        if (strcmp(req->argv[1], "/path") != 0) {
+            bu_log("ERROR: Expected argv[1]='/path', got '%s'\n", req->argv[1]);
             result = -1;
         }
     }
@@ -393,8 +411,8 @@ int test_multiple_messages_in_buffer() {
         result = -1;
     }
     
-    if (req->argc != 0) {
-        bu_log("ERROR: Expected 0 arguments, got %d\n", req->argc);
+    if (req->argc != 1) {
+        bu_log("ERROR: Expected argc=1 (command only), got %d\n", req->argc);
         result = -1;
     }
     
@@ -473,6 +491,100 @@ cleanup:
     return result;
 }
 
+int test_empty_arguments() {
+    struct command_request *req;
+    const char test_cmd[] = {'c','m','d',0x1D,'a','r','g','1',0x1D,0x1D,'a','r','g','3',0x1C,'\0'};
+    int result = 0;
+    
+    bu_log("Testing empty arguments (consecutive separators)...\n");
+    
+    req = parse_protocol_request(test_cmd, strlen(test_cmd));
+    if (!req) {
+        bu_log("ERROR: Failed to parse command with empty argument\n");
+        return -1;
+    }
+    
+    if (strcmp(req->command, "cmd") != 0) {
+        bu_log("ERROR: Expected command 'cmd', got '%s'\n", req->command);
+        result = -1;
+    }
+    
+    /* Expected: argv[0]="cmd", argv[1]="arg1", argv[2]="", argv[3]="arg3" */
+    if (req->argc != 4) {
+        bu_log("ERROR: Expected argc=4, got %d\n", req->argc);
+        result = -1;
+    } else {
+        if (strcmp(req->argv[0], "cmd") != 0) {
+            bu_log("ERROR: Expected argv[0]='cmd', got '%s'\n", req->argv[0]);
+            result = -1;
+        }
+        if (strcmp(req->argv[1], "arg1") != 0) {
+            bu_log("ERROR: Expected argv[1]='arg1', got '%s'\n", req->argv[1]);
+            result = -1;
+        }
+        if (strlen(req->argv[2]) != 0) {
+            bu_log("ERROR: Expected empty argv[2], got '%s'\n", req->argv[2]);
+            result = -1;
+        }
+        if (strcmp(req->argv[3], "arg3") != 0) {
+            bu_log("ERROR: Expected argv[3]='arg3', got '%s'\n", req->argv[3]);
+            result = -1;
+        }
+    }
+    
+    free_command_request(req);
+    
+    if (result == 0) {
+        bu_log("PASS: Empty arguments handling\n");
+    } else {
+        bu_log("FAIL: Empty arguments handling\n");
+    }
+    
+    return result;
+}
+
+int test_all_empty_arguments() {
+    struct command_request *req;
+    const char *test_cmd = "cmd\x1D\x1D\x1D\x1C";  /* cmd␝␝␝␜ */
+    int result = 0;
+    
+    bu_log("Testing all empty arguments...\n");
+    
+    req = parse_protocol_request(test_cmd, strlen(test_cmd));
+    if (!req) {
+        bu_log("ERROR: Failed to parse command with all empty arguments\n");
+        return -1;
+    }
+    
+    if (strcmp(req->command, "cmd") != 0) {
+        bu_log("ERROR: Expected command 'cmd', got '%s'\n", req->command);
+        result = -1;
+    }
+    
+    /* Expected: argv[0]="cmd", argv[1]="", argv[2]="", argv[3]="" */
+    if (req->argc != 4) {
+        bu_log("ERROR: Expected argc=4, got %d\n", req->argc);
+        result = -1;
+    } else {
+        for (int i = 1; i < req->argc; i++) {
+            if (strlen(req->argv[i]) != 0) {
+                bu_log("ERROR: Expected empty argv[%d], got '%s'\n", i, req->argv[i]);
+                result = -1;
+            }
+        }
+    }
+    
+    free_command_request(req);
+    
+    if (result == 0) {
+        bu_log("PASS: All empty arguments handling\n");
+    } else {
+        bu_log("FAIL: All empty arguments handling\n");
+    }
+    
+    return result;
+}
+
 int main(int ac, char *av[]) {
     int test_count = 0;
     int passed_count = 0;
@@ -493,6 +605,8 @@ int main(int ac, char *av[]) {
         printf("  partial      - Partial message handling\n");
         printf("  multiple     - Multiple messages in buffer\n");
         printf("  errorprop    - Error propagation in protocol\n");
+        printf("  emptyargs    - Empty arguments handling\n");
+        printf("  allempty     - All empty arguments handling\n");
         printf("  all          - Run all tests\n");
         return 1;
     }
@@ -545,6 +659,16 @@ int main(int ac, char *av[]) {
     if (BU_STR_EQUAL(av[1], "errorprop") || BU_STR_EQUAL(av[1], "all")) {
         test_count++;
         if (test_error_propagation() == 0) passed_count++;
+    }
+    
+    if (BU_STR_EQUAL(av[1], "emptyargs") || BU_STR_EQUAL(av[1], "all")) {
+        test_count++;
+        if (test_empty_arguments() == 0) passed_count++;
+    }
+    
+    if (BU_STR_EQUAL(av[1], "allempty") || BU_STR_EQUAL(av[1], "all")) {
+        test_count++;
+        if (test_all_empty_arguments() == 0) passed_count++;
     }
     
     if (test_count == 0) {

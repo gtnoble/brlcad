@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<refentry xmlns='http://docbook.org/ns/docbook' version='5.0' xml:lang='en' xml:id='mged_socket_client1'>
+<refmeta>
+    <refentrytitle>MGED_SOCKET_CLIENT</refentrytitle>
+<manvolnum>1</manvolnum>
+<refmiscinfo class='source'>BRL-CAD</refmiscinfo>
+<refmiscinfo class='manual'>BRL-CAD</refmiscinfo>
+</refmeta>
+
+<refnamediv>
+<refname>mged_socket_client</refname>
+<refpurpose>interactive client for MGED socket server</refpurpose>
+</refnamediv>
+
+<refsynopsisdiv xml:id='synopsis'>
+<cmdsynopsis>
+  <command>mged_socket_client</command>
+    <arg choice='opt'>-b</arg>
+    <arg choice='opt'>-h</arg>
+    <arg choice='plain'><replaceable>socket_path</replaceable></arg>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+<refsect1 xml:id='description'><title>DESCRIPTION</title>
+<para><command>mged_socket_client</command>
+connects to an MGED socket server and provides an interactive or batch interface
+for executing geometry commands. The MGED socket server must be started with the
+<option>-s</option> option to create a Unix domain socket.</para>
+
+<para>The client supports a simple protocol using Unicode control characters for
+message framing. Commands are sent to the server and responses are parsed and
+displayed in a human-readable format.</para>
+</refsect1>
+
+<refsect1 xml:id='options'><title>OPTIONS</title>
+<variablelist remap='TP'>
+  <varlistentry>
+  <term><option>-b</option></term>
+  <listitem>
+<para>Batch mode. Read commands from standard input instead of running interactively.
+Useful for scripting.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><option>-h</option></term>
+  <listitem>
+<para>Display help message and exit.</para>
+  </listitem>
+  </varlistentry>
+</variablelist>
+</refsect1>
+
+<refsect1 xml:id='interactive_mode'><title>INTERACTIVE MODE</title>
+<para>In interactive mode, the client provides a command prompt with special
+key bindings for inserting protocol control characters:</para>
+
+<variablelist remap='TP'>
+  <varlistentry>
+  <term><keycap>Ctrl+G</keycap></term>
+  <listitem>
+<para>Insert Group Separator (\u241d) to separate command arguments.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><keycap>Ctrl+F</keycap></term>
+  <listitem>
+<para>Insert File Separator (\u241c) and send the command immediately.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><keycap>Enter</keycap></term>
+  <listitem>
+<para>Send the command (File Separator is added automatically).</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><keycap>Ctrl+D</keycap></term>
+  <listitem>
+<para>Exit the client.</para>
+  </listitem>
+  </varlistentry>
+  <varlistentry>
+  <term><keycap>Backspace</keycap></term>
+  <listitem>
+<para>Delete the previous character.</para>
+  </listitem>
+  </varlistentry>
+</variablelist>
+
+<para>Control characters are displayed using visible Unicode symbols:
+\u241c for File Separator and \u241d for Group Separator.</para>
+</refsect1>
+
+<refsect1 xml:id='protocol'><title>PROTOCOL</title>
+<para>The MGED socket protocol uses two control characters:</para>
+
+<itemizedlist mark='bullet'>
+<listitem>
+<para><emphasis>Group Separator (GS, \x1D, \u241d)</emphasis>: Separates the command
+from its arguments and separates arguments from each other.</para>
+</listitem>
+<listitem>
+<para><emphasis>File Separator (FS, \x1C, \u241c)</emphasis>: Terminates messages.</para>
+</listitem>
+</itemizedlist>
+
+<para>Request format: <literal>command\u241darg1\u241darg2\u241d...\u241dargN\u241c</literal></para>
+<para>Response format: <literal>status\u241dresult\u241derror\u241c</literal></para>
+
+<para>Adjacent separators indicate empty arguments.</para>
+</refsect1>
+
+<refsect1 xml:id='examples'><title>EXAMPLES</title>
+<para>Start MGED with socket server:</para>
+<literallayout remap='.nf'>
+$ mged -c -a nu -s /tmp/mged.sock model.g
+</literallayout>
+
+<para>Connect interactively:</para>
+<literallayout remap='.nf'>
+$ mged_socket_client /tmp/mged.sock
+> ls
+Status: OK
+Result:
+_GLOBAL sphere.s box.r
+</literallayout>
+
+<para>Use batch mode for scripting:</para>
+<literallayout remap='.nf'>
+$ echo "units" | mged_socket_client -b /tmp/mged.sock
+Status: OK
+Result:
+mm
+</literallayout>
+
+<para>Multi-argument command in interactive mode:</para>
+<literallayout remap='.nf'>
+> in\u241dsphere.s\u241dsph\u241d0\u241d0\u241d0\u241d10
+</literallayout>
+<para>(Use Ctrl+G to insert \u241d separators between arguments)</para>
+</refsect1>
+
+<refsect1 xml:id='see_also'><title>SEE ALSO</title>
+<para><citerefentry><refentrytitle>mged</refentrytitle><manvolnum>1</manvolnum></citerefentry></para>
+<para>For detailed protocol specification, see the MGED Socket Server article
+in the BRL-CAD documentation.</para>
+</refsect1>
+
+<refsect1 xml:id='author'><title>AUTHOR</title>
+<para>BRL-CAD Team</para>
+</refsect1>
+
+<refsect1 xml:id='copyright'><title>COPYRIGHT</title>
+<para>This software is Copyright (c) 2025 by the United States
+Government as represented by U.S. Army Research Laboratory.</para>
+</refsect1>
+
+<refsect1 xml:id='bug_reports'><title>BUG REPORTS</title>
+<para>Reports of bugs or problems should be submitted via electronic
+mail to <email>devs@brlcad.org</email></para>
+</refsect1>
+</refentry>

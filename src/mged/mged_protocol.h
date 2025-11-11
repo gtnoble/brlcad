@@ -8,9 +8,14 @@
 struct bu_vls;
 
 // Protocol control characters
-#define PROTOCOL_FS '\x1C'  // File Separator
-#define PROTOCOL_GS '\x1D'  // Group Separator
-#define PROTOCOL_RS '\x1E'  // Record Separator
+// Request format: command␝arg1␝arg2␝...␝argN␜
+// Response format: status␝result␝error␜
+#define PROTOCOL_FS '\x1C'  // File Separator (message terminator)
+#define PROTOCOL_GS '\x1D'  // Group Separator (field separator)
+
+// Visual representations for display (UTF-8 symbols)
+#define PROTOCOL_FS_VISIBLE "\u241C"  // ␜
+#define PROTOCOL_GS_VISIBLE "\u241D"  // ␝
 
 // Command request structure
 struct command_request {

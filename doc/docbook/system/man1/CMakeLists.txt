@@ -94,6 +94,7 @@ set(
   loop.xml
   mac-pix.xml
   mged.xml
+  mged_socket_client.xml
   nastran-g.xml
   nirt.xml
   obj-g.xml

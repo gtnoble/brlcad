@@ -132,7 +132,7 @@ mged&gt;
     <section xml:id="Control_Characters"><info><title>Control Characters</title></info>
 
       <para>
-        Three control characters from the C1 control block are used for protocol framing:
+        Two control characters from the C1 control block are used for protocol framing:
 
         <informaltable>
           <tgroup cols="4" align="center">
@@ -159,13 +159,7 @@ mged&gt;
                 <entry>GS (␝)</entry>
                 <entry>\x1D</entry>
                 <entry>Group Separator</entry>
-                <entry>Field separator - separates command/arguments and status/result/error</entry>
-              </row>
-              <row>
-                <entry>RS (␞)</entry>
-                <entry>\x1E</entry>
-                <entry>Record Separator</entry>
-                <entry>Argument separator - separates individual command arguments</entry>
+                <entry>Field separator - separates all fields (command, arguments, status, result, error)</entry>
               </row>
             </tbody>
           </tgroup>
@@ -173,8 +167,8 @@ mged&gt;
       </para>
 
       <para>
-        The Unicode symbols ␜, ␝, and ␞ shown in the table are visual representations for documentation
-        purposes. Actual protocol messages use the literal control characters (\x1C, \x1D, \x1E).
+        The Unicode symbols ␜ and ␝ shown in the table are visual representations for documentation
+        purposes. Actual protocol messages use the literal control characters (\x1C, \x1D).
       </para>
     </section>
 
@@ -184,7 +178,7 @@ mged&gt;
         Client requests follow this format:
 
         <literallayout class="monospaced">
-&lt;command&gt;␝&lt;arg1&gt;␞&lt;arg2&gt;␞...␞&lt;argN&gt;␝
+&lt;command&gt;␝&lt;arg1&gt;␝&lt;arg2&gt;␝...␝&lt;argN&gt;␜
         </literallayout>
 
         Breaking down the structure:
@@ -200,14 +194,14 @@ mged&gt;
               </row>
               <row>
                 <entry><emphasis role="bold">␝</emphasis></entry>
-                <entry>Group Separator marking end of command and start of arguments</entry>
+                <entry>Group Separator marking end of command and start of first argument</entry>
               </row>
               <row>
-                <entry><emphasis role="bold">&lt;arg1&gt;␞&lt;arg2&gt;␞...</emphasis></entry>
-                <entry>Command arguments separated by Record Separator characters</entry>
+                <entry><emphasis role="bold">&lt;arg1&gt;␝&lt;arg2&gt;␝...</emphasis></entry>
+                <entry>Command arguments separated by Group Separator characters</entry>
               </row>
               <row>
-                <entry><emphasis role="bold">␝</emphasis></entry>
+                <entry><emphasis role="bold">␜</emphasis></entry>
                 <entry>File Separator marking end of message (message terminator)</entry>
               </row>
             </tbody>
@@ -219,10 +213,10 @@ mged&gt;
         Example requests:
 
         <literallayout class="monospaced">
-ls␝                                    (list database contents)
-units␝                                 (query current units)
-in␝sphere.s␞sph␞0␞0␞0␞5␝              (create sphere)
-opendb␝/path/to/model.g␝               (open database)
+ls␜                                    (list database contents)
+units␜                                 (query current units)
+in␝sphere.s␝sph␝0␝0␝0␝5␜              (create sphere)
+opendb␝/path/to/model.g␜               (open database)
         </literallayout>
       </para>
     </section>
@@ -345,13 +339,13 @@ ERR␝␝Unknown command: invalid␝         (command not recognized)
         <itemizedlist mark="bullet"><listitem><para>
               Unix domain socket connection using <literal>socket.AF_UNIX</literal>
             </para></listitem><listitem><para>
-              Proper insertion of control characters (\x1C, \x1D, \x1E) for message framing
+              Proper insertion of control characters (\\x1C, \\x1D) for message framing
             </para></listitem><listitem><para>
               Automatic message termination with FS character
             </para></listitem><listitem><para>
               Response parsing to extract status, result, and error fields
             </para></listitem><listitem><para>
-              Visual representation of control characters for user display (␜, ␝, ␞)
+              Visual representation of control characters for user display (\u241c, \u241d)
             </para></listitem><listitem><para>
               Color-coded output for improved readability
             </para></listitem></itemizedlist>
@@ -366,7 +360,6 @@ import socket
 # Define protocol control characters
 FS = '\x1c'  # File Separator (message terminator)
 GS = '\x1d'  # Group Separator (field separator)
-RS = '\x1e'  # Record Separator (argument separator)
 
 # Connect to MGED socket server
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -395,12 +388,12 @@ sock.close()
       </para>
 
       <para>
-        For commands with multiple arguments, use the Record Separator to delimit them:
+        For commands with multiple arguments, use the Group Separator to delimit them:
 
         <programlisting language="python">
 # Create a sphere at origin with radius 5
 # Command: in sphere.s sph 0 0 0 5
-command = f"in{GS}sphere.s{RS}sph{RS}0{RS}0{RS}0{RS}5{FS}"
+command = f"in{GS}sphere.s{GS}sph{GS}0{GS}0{GS}0{GS}5{FS}"
 sock.send(command.encode('utf-8'))
 response = sock.recv(4096).decode('utf-8')
 # ... parse response as above ...
@@ -408,9 +401,11 @@ response = sock.recv(4096).decode('utf-8')
       </para>
 
       <para>
-        The complete <filename>mged_socket_debug.py</filename> example provides an interactive
-        shell with special key bindings (Ctrl+G, Ctrl+R, Ctrl+F) to insert control characters,
-        making it useful for testing and debugging protocol interactions.
+        The <command>mged_socket_client</command> utility provides an interactive
+        interface with special key bindings (Ctrl+G for GS, Ctrl+F for FS) to insert control characters,
+        making it useful for testing and debugging protocol interactions. See
+        <citerefentry><refentrytitle>mged_socket_client</refentrytitle><manvolnum>1</manvolnum></citerefentry>
+        for details.
       </para>
     </section>
 
@@ -605,13 +600,12 @@ import socket
 
 FS = '\x1c'
 GS = '\x1d'
-RS = '\x1e'
 
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect('/tmp/mged.sock')
 
 # Create sphere: in sphere.s sph 0 0 0 100
-command = f"in{GS}sphere.s{RS}sph{RS}0{RS}0{RS}0{RS}100{FS}"
+command = f"in{GS}sphere.s{GS}sph{GS}0{GS}0{GS}0{GS}100{FS}"
 sock.send(command.encode('utf-8'))
 
 response = sock.recv(4096).decode('utf-8')
@@ -682,11 +676,11 @@ Error message: nonexistent_command: command not found
         <programlisting language="python">
 # Client 1: Create an object
 import socket
-FS, GS, RS = '\x1c', '\x1d', '\x1e'
+FS, GS = '\x1c', '\x1d'
 
 sock1 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock1.connect('/tmp/mged.sock')
-sock1.send(f"in{GS}sphere1.s{RS}sph{RS}0{RS}0{RS}0{RS}50{FS}".encode('utf-8'))
+sock1.send(f"in{GS}sphere1.s{GS}sph{GS}0{GS}0{GS}0{GS}50{FS}".encode('utf-8'))
 response1 = sock1.recv(4096).decode('utf-8')
 
 # Client 2: List objects (will see sphere1.s created by Client 1)
