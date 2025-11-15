@@ -6,6 +6,11 @@ if(TARGET libged)
   distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_mater.log")
   distclean("${CMAKE_CURRENT_BINARY_DIR}/ged_mater_test.g")
 
+  brlcad_addexec(regress_plot plot.c libged TEST_USESDATA)
+  brlcad_regression_test(regress-ged_plot "regress_plot" EXEC regress_plot)
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_plot.log")
+  distclean("${CMAKE_CURRENT_BINARY_DIR}/ged_plot_test.g")
+
   brlcad_addexec(regress_push push.cpp libged TEST_USESDATA)
   brlcad_regression_test(regress-ged_push "regress_push;ged-npush" EXEC regress_push)
   distclean("${CMAKE_CURRENT_BINARY_DIR}/regress-ged_push.log")
@@ -37,10 +42,12 @@ endif(TARGET libged)
 cmakefiles(
   CMakeLists.txt
   mater.c
+  plot.c
   push.cpp
   ppush_tests.g
   push_tests.g
   regress-ged_mater.cmake.in
+  regress-ged_plot.cmake.in
   regress-ged_push.cmake.in
   xpush_tests.g
   mged_server_protocol.c

@@ -1,0 +1,90 @@
+# Values set at CMake configure time 
+set(CBDIR "@CMAKE_CURRENT_BINARY_DIR@")
+set(CSDIR "@CMAKE_CURRENT_SOURCE_DIR@")
+set(LOGFILE "${CBDIR}/regress-ged_plot.log")
+
+set(BU_DIR_CACHE ${CBDIR}/cache)
+set(LIBRT_CACHE ${CBDIR}/rtcache)
+set(ENV{BU_DIR_CACHE} ${BU_DIR_CACHE})
+set(ENV{LIBRT_CACHE} ${LIBRT_CACHE})
+file(REMOVE_RECURSE "${BU_DIR_CACHE}")
+file(REMOVE_RECURSE "${LIBRT_CACHE}")
+file(MAKE_DIRECTORY "${BU_DIR_CACHE}")
+file(MAKE_DIRECTORY "${LIBRT_CACHE}")
+
+set(
+  OUTPUT_FILES
+  "${CBDIR}/ged_plot_test.g"
+  "${CBDIR}/test_plot.pl"
+)
+
+file(WRITE "${LOGFILE}" "Starting plot test run\n")
+
+# The executable locations aren't known at CMake configure time, so it is passed
+# in via the EXEC variable at runtime by a generator expression in the parent
+# build.  De-quote it and assign it to the appropriate variable.
+string(REPLACE "\\" "" PLOT_EXEC "${EXEC}")
+if(NOT EXISTS "${PLOT_EXEC}")
+  file(WRITE "${LOGFILE}" "plot test program not found at location \"${PLOT_EXEC}\" - aborting\n")
+  file(READ "${LOGFILE}" LOG)
+  message(FATAL_ERROR "Unable to find plot test program, aborting.\nSee ${LOGFILE} for more details.\n${LOG}")
+endif(NOT EXISTS "${PLOT_EXEC}")
+
+# Clean up in case we've run before unsuccessfully
+foreach(of ${OUTPUT_FILES})
+  execute_process(
+    COMMAND "@CMAKE_COMMAND@" -E remove -f "${of}"
+  )
+endforeach(of ${OUTPUT_FILES})
+
+# List of all test cases
+set(TEST_CASES
+  "no_geometry"
+  "text_basic"
+  "text_3d"
+  "text_2d"
+  "text_float"
+  "text_zclip"
+  "text_combined"
+  "file_output"
+)
+
+# Run each test case
+foreach(test_case ${TEST_CASES})
+  file(APPEND "${LOGFILE}" "Running ${PLOT_EXEC} ${test_case}\n")
+  execute_process(
+    COMMAND "${PLOT_EXEC}" "${test_case}"
+    RESULT_VARIABLE ged_plot_result
+    OUTPUT_VARIABLE ged_plot_log
+    ERROR_VARIABLE ged_plot_log
+    WORKING_DIRECTORY ${CBDIR}
+  )
+  file(APPEND "${LOGFILE}" "${ged_plot_log}")
+  
+  if(ged_plot_result)
+    file(READ "${LOGFILE}" LOG)
+    message(FATAL_ERROR "[regress-ged_plot] Failure on ${test_case}: ${ged_plot_result}. See ${LOGFILE} for more info.\n${LOG}")
+  endif(ged_plot_result)
+  
+  # Clean up between tests
+  foreach(of ${OUTPUT_FILES})
+    execute_process(
+      COMMAND "@CMAKE_COMMAND@" -E remove -f "${of}"
+    )
+  endforeach(of ${OUTPUT_FILES})
+endforeach(test_case)
+
+# Clean up cache directories
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" -E rm -rf ${BU_DIR_CACHE}
+)
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" -E rm -rf ${LIBRT_CACHE}
+)
+
+# Local Variables:
+# tab-width: 8
+# mode: cmake
+# indent-tabs-mode: t
+# End:
+# ex: shiftwidth=2 tabstop=8

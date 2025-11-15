@@ -204,8 +204,11 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
     int Three_D;			/* 0=2-D -vs- 1=3-D */
     int Z_clip;			/* Z clipping */
     int floating;			/* 3-D floating point plot */
+    int text_mode;			/* ASCII text output to ged_result_str */
     int is_pipe = 0;
-    static const char *usage = "file [2|3] [f] [g] [z]";
+    char *mem_buffer = NULL;
+    size_t mem_size = 0;
+    static const char *usage = "file [t] [2|3] [f] [g] [z]";
 
     GED_CHECK_DRAWABLE(gedp, BRLCAD_ERROR);
     GED_CHECK_VIEW(gedp, BRLCAD_ERROR);
@@ -224,8 +227,12 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
     Three_D = 1;				/* 3-D w/color, by default */
     Z_clip = 0;				/* NO Z clipping, by default*/
     floating = 0;
+    text_mode = 0;				/* Binary output, by default */
     while (argv[1] != (char *)0 && argv[1][0] == '-') {
 	switch (argv[1][1]) {
+	    case 't':
+		text_mode = 1;
+		break;
 	    case 'f':
 		floating = 1;
 		break;
@@ -247,15 +254,37 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
 		break;
 	    default:
 		bu_vls_printf(gedp->ged_result_str, "%s: bad PLOT option %s\n", argv[0], argv[1]);
-		break;
+		return BRLCAD_ERROR;
 	}
 	argv++;
     }
-    if (argv[1] == (char *)0) {
+    if (!text_mode && argv[1] == (char *)0) {
 	bu_vls_printf(gedp->ged_result_str, "%s: no filename or filter specified\n", argv[0]);
 	return BRLCAD_ERROR;
     }
-    if (argv[1][0] == '|') {
+
+    if (text_mode) {
+	/* Text mode: write to memory buffer */
+#ifdef HAVE_OPEN_MEMSTREAM
+	fp = open_memstream(&mem_buffer, &mem_size);
+#elif defined(HAVE_FMEMOPEN)
+	/* Allocate initial buffer for fmemopen */
+	mem_size = 1024 * 1024; /* 1MB initial size */
+	mem_buffer = (char *)bu_malloc(mem_size, "plot text buffer");
+	fp = fmemopen(mem_buffer, mem_size, "w");
+#else
+	bu_vls_printf(gedp->ged_result_str, "%s: text mode not supported on this platform\n", argv[0]);
+	return BRLCAD_ERROR;
+#endif
+	if (fp == NULL) {
+	    bu_vls_printf(gedp->ged_result_str, "%s: failed to create memory stream\n", argv[0]);
+#ifdef HAVE_FMEMOPEN
+	    if (mem_buffer) bu_free(mem_buffer, "plot text buffer");
+#endif
+	    return BRLCAD_ERROR;
+	}
+	is_pipe = 0;
+    } else if (argv[1][0] == '|') {
 	struct bu_vls str = BU_VLS_INIT_ZERO;
 	bu_vls_strcpy(&str, &argv[1][1]);
 	while ((++argv)[1] != (char *)0) {
@@ -282,12 +311,38 @@ ged_plot_core(struct ged *gedp, int argc, const char *argv[])
 	is_pipe = 0;
     }
 
+    /* Set output mode for text mode */
+    if (text_mode) {
+	pl_setOutputMode(PL_OUTPUT_MODE_TEXT);
+    }
+
     dl_plot(gedp->i->ged_gdp->gd_headDisplay, fp, gedp->ged_gvp->gv_model2view, floating, gedp->ged_gvp->gv_center, gedp->ged_gvp->gv_scale, Three_D, Z_clip);
 
-    if (is_pipe)
+    /* Restore binary mode */
+    if (text_mode) {
+	pl_setOutputMode(PL_OUTPUT_MODE_BINARY);
+    }
+
+    if (is_pipe) {
 	(void)pclose(fp);
-    else
+    } else {
 	(void)fclose(fp);
+	
+	if (text_mode) {
+	    /* Return the text buffer contents via ged_result_str */
+#ifdef HAVE_OPEN_MEMSTREAM
+	    if (mem_buffer && mem_size > 0) {
+		bu_vls_strncpy(gedp->ged_result_str, mem_buffer, mem_size);
+		bu_free(mem_buffer, "plot text buffer");
+	    }
+#elif defined(HAVE_FMEMOPEN)
+	    if (mem_buffer) {
+		bu_vls_strcpy(gedp->ged_result_str, mem_buffer);
+		bu_free(mem_buffer, "plot text buffer");
+	    }
+#endif
+	}
+    }
 
     return BRLCAD_OK;
 }
